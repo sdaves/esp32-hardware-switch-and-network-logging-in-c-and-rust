@@ -27,10 +27,12 @@ before the Phase 0 gate passes.**
 - Optionally name a phase: *"run Phase 1 of the rust port runbook"* (`PHASE=1`).
 - If no phase is named, start at the first incomplete phase.
 - Phases are ordered and gated: Phase 0 decides the emulator strategy for everything after it.
-- All file writes go under `rust/` (plus the one compose edit in §8). Never modify `main/`,
-  `test/`, `scripts/`, or `tests/velxio/` — reuse the last read-only.
-- Build/run firmware and emulator work happens **inside the Velxio container**, driven through
-  the host listener (`curl http://host.docker.internal:2222/...`); see `AGENTS.md` §5–§6.
+- All file writes go under `rust/` (plus the two container edits in §8 and §4.0). Never modify
+  `main/`, `test/`, `scripts/`, or `tests/velxio/` — reuse the last read-only.
+- Host-side Rust work (`make provision`, `cargo test`, `make sim`, `make wasm`) runs **in the
+  devcontainer** now that it shares the `esp-rust` volume (§4.0). Firmware and emulator work
+  happens **inside the Velxio container**, driven through the host listener
+  (`curl http://host.docker.internal:2222/...`); see `AGENTS.md` §5–§6.
 
 ---
 
@@ -97,7 +99,7 @@ rust/
 ├── sdkconfig.defaults         # 4 MB flash, Wi-Fi on, custom partition table
 ├── partitions.csv             # large factory app (std+IDF binary > 1 MB default)
 ├── Makefile                   # provision / build / test / wasm / sim / scenario
-├── .gitignore                 # target/, dist/, pkg/, .toolchain/, .embuild/
+├── .gitignore                 # target/, dist/, pkg/, .embuild/
 ├── crates/
 │   ├── tea-core/              # pure TEA (model/msg/cmd/update), all use cases
 │   ├── tea-platform/          # event bus + module trait + registry
@@ -128,6 +130,10 @@ Do this before porting anything. It de-risks the entire project in about a day.
   `rust/scripts/provision-rust.sh` installed: `stable-aarch64-unknown-linux-gnu` (with
   `wasm32-unknown-unknown`), the `esp` toolchain, `cargo install espup espflash`, and the
   Xtensa GCC/LLVM export at `/opt/esp-rust/export-esp.sh`.
+- [ ] **0.1a-share Devcontainer shares the Rust volume** — pending. Mount the same `esp-rust`
+  volume into the VS Code devcontainer so host-side Rust work (`cargo test`, host sim, wasm)
+  runs there against one toolchain + crate cache, while velxio keeps building firmware from
+  the identical bytes. Exact edits and verification: §4.0.
 - [ ] **0.1b std additions** — pending. Re-run `provision-rust.sh`: it must also install
   `cargo install ldproxy` (linker driver for `esp-idf-svc`) and
   `rustup component add rust-src --toolchain esp` (for `-Zbuild-std`).
@@ -149,6 +155,70 @@ Measured toolchain facts (use these exact paths/names elsewhere in the runbook):
 | Xtensa env script | `/opt/esp-rust/export-esp.sh` (sets `PATH` + `LIBCLANG_PATH`) |
 | ESP-IDF tree (reused) | `/opt/esp-idf-v4.4` (`idf44` volume) |
 | `espup`/`espflash`/`ldproxy` | `/opt/esp-rust/cargo/bin/{espup,espflash,ldproxy}` |
+
+### 4.0 Share the volume with the devcontainer (0.1a-share)
+
+The devcontainer (`.devcontainer/devcontainer.json`, image-only, user `vscode`) has no Docker
+daemon and, before this step, no Rust. Mount the velxio volume into it so both containers use
+the same `/opt/esp-rust` toolchain and cargo registry cache.
+
+**Prerequisite — pin the compose project name.** Without a top-level `name:`, compose names the
+volume after the host checkout directory, so the devcontainer mount cannot find it. Add the
+top-level name to `docker-compose.yaml`; this reuses the existing `esp32simulated_esp-rust`
+volume (no re-download, no migration):
+
+```yaml
+name: esp32simulated
+
+services:
+  velxio:
+    # ...
+```
+
+**Then add to `.devcontainer/devcontainer.json`** (alongside `image`/`features`):
+
+```json
+"mounts": [
+  "source=esp32simulated_esp-rust,target=/opt/esp-rust,type=volume"
+],
+"containerEnv": {
+  "CARGO_HOME": "/opt/esp-rust/cargo",
+  "RUSTUP_HOME": "/opt/esp-rust/rustup"
+},
+"remoteEnv": {
+  "CARGO_HOME": "/opt/esp-rust/cargo",
+  "RUSTUP_HOME": "/opt/esp-rust/rustup",
+  "PATH": "/opt/esp-rust/cargo/bin:${containerEnv:PATH}"
+},
+"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc make pkg-config libudev-dev libssl-dev",
+"postStartCommand": "bash -lc 'if [ ! -w /opt/esp-rust/cargo ]; then sudo chown -R vscode:vscode /opt/esp-rust; fi'"
+```
+
+Notes:
+
+- `mounts` reuses the exact velxio volume; `containerEnv`/`remoteEnv` put `cargo`/`rustc`/
+  `rustup`/`espflash`/`ldproxy` on `PATH` and point the crate cache at the shared registry.
+- The volume is provisioned as root by velxio, so the guarded `postStartCommand` chowns it to
+  `vscode` once; root (velxio) can always still write. The guard makes it a no-op after the
+  first run and re-fixes ownership if velxio re-provisions.
+- `postCreateCommand` installs the host libs the shared binaries need (`gcc` for linking,
+  `libudev` for espflash, `openssl`/`pkg-config`).
+- This is the **host** toolchain only: firmware (`xtensa`) builds still run in velxio because
+  the IDF 4.4 tree (`idf44`) and the emulator live there.
+- Both containers are `aarch64`, so the shared binaries are compatible; a named volume is per
+  Docker host (shares containers on one daemon, not separate physical machines). Do not run
+  `provision-rust.sh`/`cargo install` from both containers at the same time.
+
+**Verify** (rebuild the devcontainer first — VS Code: "Dev Containers: Rebuild Container"):
+
+```sh
+ls /opt/esp-rust && cargo --version && rustup toolchain list
+ls /opt/esp-rust/cargo/registry          # shared crate cache populated
+cd rust && cargo test                    # host tests; no toolchain download
+# Same bytes visible from velxio:
+curl -sS -G --data-urlencode 'cmd=ls /opt/esp-rust' http://host.docker.internal:2222/exec
+docker compose config | grep -A2 'volumes:'   # on the host: name is esp32simulated_esp-rust
+```
 
 1. **Provision** (idempotent, mirrors `scripts/provision-idf44.sh`):
    `rust/scripts/provision-rust.sh` installs rustup (aarch64), `cargo install espup espflash
@@ -313,10 +383,11 @@ This phase is deferred until Phases 1–2 are green.
 
 ---
 
-## 8. The one edit outside `rust/` (container toolchain persistence)
+## 8. The two edits outside `rust/` (container toolchain persistence)
 
 The named-volume decision requires adding a volume and mount to root `docker-compose.yaml` so
-the aarch64 Xtensa toolchain survives `down`/`up`, exactly like `idf44:/opt/esp-idf-v4.4`.
+the aarch64 Xtensa toolchain survives `down`/`up`, exactly like `idf44:/opt/esp-idf-v4.4`, and
+mounting that same volume into the devcontainer (§4.0) so one toolchain/crate cache is shared.
 **Applied** — `docker-compose.yaml` now mounts `esp-rust:/opt/esp-rust` and declares the
 `esp-rust` volume; the container was recreated with `/up` and the mount verified:
 
@@ -337,16 +408,19 @@ as well, so **all** toolchain state lands in the volume. `rust/Makefile` sets th
 every target, and — for firmware targets — clears any ambient v5 `IDF_PATH` and sources
 `/opt/esp-idf-v4.4/export.sh`, exactly like `scripts/build.sh`.
 
-> If a hard "no root edits" rule is later required, the alternative is `RUSTUP_HOME`/`CARGO_HOME`
-> under `rust/.toolchain` (bind-mounted, gitignored). It persists on the host and needs no
-> compose change, but scatters the toolchain into the repo instead of a volume.
-
-The host listener has no Rust route; drive Rust builds through `/exec`:
+Now that the devcontainer shares the volume (§4.0), host-side Rust work runs **directly in the
+devcontainer** — no listener round-trip:
 
 ```sh
-curl -sS --max-time 2400 -G \
-  --data-urlencode 'cmd=cd /workspace/rust && make provision' \
-  http://host.docker.internal:2222/exec
+cd rust && make provision    # idempotent
+cd rust && cargo test
+cd rust && make sim
+cd rust && make wasm
+```
+
+Only firmware/emulator work still goes through velxio's `/exec`:
+
+```sh
 curl -sS --max-time 2400 -G \
   --data-urlencode 'cmd=cd /workspace/rust && make test' \
   http://host.docker.internal:2222/exec
@@ -428,6 +502,8 @@ IDF binaries are large, this project supplies its own partition table.
 | `can't find crate for std` / `build-std` fails | `rust-src` component not installed for `esp` | `rustup component add rust-src --toolchain esp` (provision §4) |
 | `linker 'ldproxy' not found` | `ldproxy` not installed | `cargo install ldproxy` (provision §4) |
 | `/usr/bin/env: bad interpreter: Permission denied` running `rust/scripts/*.sh` | new files on the virtiofs mount are created without the execute bit | run via `bash scripts/provision-rust.sh`, or `chmod +x` the script |
+| `Permission denied` writing `/opt/esp-rust/cargo` in the devcontainer | the volume is provisioned as root, but the devcontainer runs as `vscode` | the guarded `postStartCommand` chowns it; otherwise `sudo chown -R vscode:vscode /opt/esp-rust` (§4.0) |
+| Devcontainer mount fails / `cargo` missing after rebuild | compose project name not pinned, so the volume is named after the checkout dir | add top-level `name: esp32simulated` and mount `source=esp32simulated_esp-rust` (§4.0) |
 | I IDF `libc`/`time_t` link or size errors | wrong `espidf_time` cfg | set `RUSTFLAGS="--cfg espidf_time32"` on IDF 4.4 (not `time64`) |
 | `ESP_IDF_TOOLS_INSTALL_DIR=fromenv` errors | IDF environment not activated | `. /opt/esp-idf-v4.4/export.sh` first (and unset ambient v5 vars) |
 | Wrong IDF version built | ambient v5 `IDF_PATH` wins | unset `IDF_PATH IDF_PYTHON_ENV_PATH IDF_TOOLS_EXPORT_CMD IDF_TOOLS_INSTALL_CMD` before sourcing 4.4 |

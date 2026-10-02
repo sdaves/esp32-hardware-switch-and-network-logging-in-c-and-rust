@@ -52,7 +52,7 @@ tick, and dispatches queue items to each plugin's pure update function.
 | Where | Needs |
 |---|---|
 | **Host** (PC / NAS / server) | Docker + Docker Compose. Runs the Velxio image (ESP-IDF v5.5, Xtensa toolchain, QEMU, nginx). |
-| **This devcontainer** | Python 3 and `curl` only. It has **no Docker daemon**, so builds and emulator runs go through the host listener. |
+| **This devcontainer** | Python 3 and `curl`, plus the shared `esp-rust` Rust toolchain + crate cache mounted from the host stack (`.devcontainer/devcontainer.json`). It has **no Docker daemon**, so firmware builds and emulator runs go through the host listener. |
 
 The Velxio image ships ESP-IDF (v5.x) and QEMU but **no host C compiler**, so the
 Compose startup installs `gcc make libc6-dev` and the Python test deps. It also
