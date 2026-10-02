@@ -1,6 +1,6 @@
 # Runbook: Port the platform to Rust (esp-idf-svc + iced)
 
-Status: in progress
+Status: Phase 0 (provisioning + hello-world + Wi-Fi spikes) complete; Phase 1 next
 Audience: firmware maintainers and coding agents
 Scope: stand up a self-contained `rust/` workspace that reimplements the C platform in Rust —
 a **standard (std) `esp-idf-svc` firmware** for the classic ESP32, a native host simulator, and
@@ -77,6 +77,7 @@ curl/gcc/make     -> present
 | Decision | Value |
 |---|---|
 | Firmware runtime | `esp-idf-svc` **0.48.x** (std), target `xtensa-esp32-espidf` |
+| `esp-idf-svc` source | vendored `rust/vendor/esp-idf-svc` (0.48.1 + `c_char` cast fix) via `[patch.crates-io]` |
 | ESP-IDF | **v4.4.7** at `/opt/esp-idf-v4.4`, reused via `IDF_PATH` + `ESP_IDF_TOOLS_INSTALL_DIR=fromenv` |
 | Rust cfg | `--cfg espidf_time32` (never `espidf_time64` on v4.4) |
 | UI runtime | iced, native + `wasm32-unknown-unknown`, network client only |
@@ -106,6 +107,9 @@ rust/
 │   ├── firmware/              # std esp-idf-svc bin (plugins live here)
 │   ├── host/                  # std CLI simulator + cargo integration tests
 │   └── ui/                    # iced app (native + wasm32) that connects to the device
+├── vendor/
+│   └── esp-idf-svc/           # 0.48.1 + the c_char casts fix ([patch.crates-io])
+├── scenarios/                 # Rust-side emulator scenarios (phase0_hello/wifi.yaml)
 ├── scripts/
 │   ├── provision-rust.sh      # rustup + espup + espflash + ldproxy + rust-src + wasm, idempotent
 │   ├── build.sh               # cargo +esp build -> dist/firmware.merged.bin (4 MB)
@@ -113,6 +117,9 @@ rust/
 │   └── wasm.sh                # trunk build of ui
 └── dist/                      # merged bin artifacts (gitignored)
 ```
+
+Only `crates/firmware` and the two Phase 0 scenarios exist so far; the other crates,
+`scripts/test.sh`, and `scripts/wasm.sh` arrive in Phases 1–3.
 
 `tea-core` and `tea-platform` stay `#![no_std]`-compatible pure crates so the same logic is
 unit-tested on the desktop and shipped to silicon; the **firmware shell** is std. (They remain
@@ -130,17 +137,26 @@ Do this before porting anything. It de-risks the entire project in about a day.
   `rust/scripts/provision-rust.sh` installed: `stable-aarch64-unknown-linux-gnu` (with
   `wasm32-unknown-unknown`), the `esp` toolchain, `cargo install espup espflash`, and the
   Xtensa GCC/LLVM export at `/opt/esp-rust/export-esp.sh`.
-- [ ] **0.1a-share Devcontainer shares the Rust volume** — pending. Mount the same `esp-rust`
-  volume into the VS Code devcontainer so host-side Rust work (`cargo test`, host sim, wasm)
-  runs there against one toolchain + crate cache, while velxio keeps building firmware from
-  the identical bytes. Exact edits and verification: §4.0.
-- [ ] **0.1b std additions** — pending. Re-run `provision-rust.sh`: it must also install
-  `cargo install ldproxy` (linker driver for `esp-idf-svc`) and
-  `rustup component add rust-src --toolchain esp` (for `-Zbuild-std`).
+- [x] **0.1a-share Devcontainer shares the Rust volume** — **config applied; rebuild pending**.
+  `docker-compose.yaml` gained a top-level `name: esp32simulated` and
+  `.devcontainer/devcontainer.json` gained the `mounts` / `containerEnv` / `remoteEnv` /
+  `postCreateCommand` / `postStartCommand` from §4.0. The devcontainer itself still needs a
+  VS Code "Rebuild Container" before host-side `cargo` appears; firmware work in this run went
+  through velxio's `/exec`, so this step is not on the critical path.
+- [x] **0.1b std additions** — done. `provision-rust.sh` now also runs
+  `cargo install ldproxy --locked` (esp-idf-svc's linker driver) and guarantees
+  `rustup component add rust-src --toolchain esp` (for `-Zbuild-std`; it was already present).
+  Both were re-run in velxio and verified.
 - [x] **0.3 aarch64 gate** — pass. The Espressif fork publishes an aarch64 host build; the
   `esp` toolchain resolves and installs on this container (no cross-arch problem).
-- [ ] **0.2 Hello-world spike** — pending.
-- [ ] **0.4 Wi-Fi spike** — pending.
+- [x] **0.2 Hello-world spike** — pass. `rust/dist/firmware.merged.bin` is exactly 4 MB, boots
+  in Velxio (4 MB image, 3 MB factory partition) and prints
+  `Platform Engine Initializing: Found 0 Autonomous Modules.` / `# RUST HELLO (idf 4.4)`.
+  Scenario `rust/scenarios/phase0_hello.yaml` → `RESULT: PASS`.
+- [x] **0.4 Wi-Fi spike** — pass. `BlockingWifi<EspWifi>` + `std::net` HTTP GET to
+  `http://192.168.4.2:8000/` succeeds against `scripts/dev-http-server.sh`:
+  `# WIFI CONNECTED (Espressif)` → `-> status 200` → `# HTTP BODY …` → `# NETWORK SYNCED`.
+  Scenario `rust/scenarios/phase0_wifi.yaml` → `RESULT: PASS`.
 
 Measured toolchain facts (use these exact paths/names elsewhere in the runbook):
 
@@ -150,10 +166,10 @@ Measured toolchain facts (use these exact paths/names elsewhere in the runbook):
 | `RUSTUP_HOME` | `/opt/esp-rust/rustup` |
 | `CARGO_HOME` | `/opt/esp-rust/cargo` (binaries at `cargo/bin`) |
 | `HOME` | `/opt/esp-rust/home` (so espup's `~/.espressif` lands in the volume) |
-| Firmware toolchain | `esp` (`cargo +esp …`) |
+| Firmware toolchain | `esp` (`cargo +esp …`), `rustc 1.97.0-nightly` |
 | Host toolchain | `stable-aarch64-unknown-linux-gnu` (default) |
 | Xtensa env script | `/opt/esp-rust/export-esp.sh` (sets `PATH` + `LIBCLANG_PATH`) |
-| ESP-IDF tree (reused) | `/opt/esp-idf-v4.4` (`idf44` volume) |
+| ESP-IDF tree (reused) | `/opt/esp-idf-v4.4` (`idf44` volume), `v4.4.7` |
 | `espup`/`espflash`/`ldproxy` | `/opt/esp-rust/cargo/bin/{espup,espflash,ldproxy}` |
 
 ### 4.0 Share the volume with the devcontainer (0.1a-share)
@@ -161,6 +177,11 @@ Measured toolchain facts (use these exact paths/names elsewhere in the runbook):
 The devcontainer (`.devcontainer/devcontainer.json`, image-only, user `vscode`) has no Docker
 daemon and, before this step, no Rust. Mount the velxio volume into it so both containers use
 the same `/opt/esp-rust` toolchain and cargo registry cache.
+
+> **Applied.** The `name:`/`mounts`/env/`postCreate`/`postStart` edits below are committed. The
+> devcontainer still needs a VS Code "Rebuild Container" before host-side `cargo`/`rustup`
+> appear; the Phase 0 spikes did not depend on it (they ran through velxio's `/exec`). Run the
+> verification block below after rebuilding to confirm the mount.
 
 **Prerequisite — pin the compose project name.** Without a top-level `name:`, compose names the
 volume after the host checkout directory, so the devcontainer mount cannot find it. Add the
@@ -253,11 +274,60 @@ docker compose config | grep -A2 'volumes:'   # on the host: name is esp32simula
 
 | Spike | Result | Consequence |
 |---|---|---|
-| hello-world boots in Velxio | pass | proceed; GPIO/UART parity is viable |
-| `esp-idf-svc` Wi-Fi boots in Velxio | pass (expected) | **one** std firmware serves all three surfaces |
-| `esp-idf-svc` Wi-Fi fails in Velxio | unexpected | apply §12: scope emulator parity to UC-1; UC-5 host-tested + real HW |
+| hello-world boots in Velxio | **pass** | proceed; GPIO/UART parity is viable |
+| `esp-idf-svc` Wi-Fi boots in Velxio | **pass** | **one** std firmware serves all three surfaces |
+| `esp-idf-svc` Wi-Fi fails in Velxio | not hit | §12 fallback not needed |
 
-Record the raw boot serial for both spikes in the Phase 0 notes so the decision is auditable.
+Gate decision: **proceed to Phase 1.** The std `esp-idf-svc` shell, built against the reused
+IDF 4.4.7 tree, boots and reaches the Wi-Fi + HTTP success path in the emulator, so the one
+firmware can serve GPIO/UART (UC-1) and the UC-5 network chain.
+
+Raw boot serial (Phase 0.4, `rust/dist/firmware.merged.bin`):
+
+```text
+I (12618) rust_firmware: Platform Engine Initializing: Found 0 Autonomous Modules.
+# RUST HELLO (idf 4.4)
+I (20368) rust_firmware: # WIFI CONNECTED (Espressif)
+I (20748) rust_firmware: -> status 200
+I (20768) rust_firmware: # HTTP BODY Server: BaseHTTP/0.6 Python/3.12.14
+I (20828) rust_firmware: # NETWORK SYNCED
+```
+
+The 0.2 boot additionally shows the bootloader reporting `ESP-IDF v4.4.7`,
+`SPI Flash Size : 4MB`, and the custom partition table
+(`factory app … 00010000 00300000`), i.e. the 3 MB factory partition is in effect.
+
+### Phase 0 findings (deviations from the original plan)
+
+The spike surfaced five concrete gotchas. They are already fixed in the committed `rust/`
+tree; this list is so the next agent does not rediscover them.
+
+1. **`core::ffi::c_char` is `u8` on this toolchain, but `esp-idf-svc` 0.48.1 hardcodes `i8`.**
+   `bindgen` emits `core::ffi::c_char` for C `char` unconditionally (no clang flag changes
+   this), and the current `esp` rustc defines it unsigned for `xtensa-esp32-espidf`, so
+   `esp-idf-svc`'s `tls.rs` / `private/cstr.rs` fail with `E0308`. Fix: vendor the crate at
+   `rust/vendor/esp-idf-svc` and use `c_char` for those casts; wired in with
+   `[patch.crates-io]` in `rust/Cargo.toml`. See `rust/vendor/esp-idf-svc/CHANGES.md`. Staying
+   on the 0.48.1 line preserves IDF 4.4 support (0.50.x+ fixes the casts but targets IDF 5.1+).
+2. **The default main-task stack (~3.5 KB) overflows** as soon as `EspWifi` starts:
+   `***ERROR*** A stack overflow in task main` → reboot loop. Fix:
+   `CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384` in `rust/sdkconfig.defaults`.
+3. **`bindgen`/`cc` need espup's export.** Sourcing only `/opt/esp-idf-v4.4/export.sh` leaves
+   `LIBCLANG_PATH` unset and provides `xtensa-esp32-elf-gcc` (not the `xtensa-esp-elf-gcc`
+   `cc` probes for). `rust/scripts/build.sh` sources `/opt/esp-rust/export-esp.sh` after the IDF
+   export, which fixes both `libclang` and compiler-family detection.
+4. **The custom partition table must be globbed into the CMake project.** esp-idf-sys looks for
+   `<out>/partitions.csv`; set `ESP_IDF_GLOB_BASE=<rust dir>` +
+   `ESP_IDF_GLOB_FILES=partitions.csv` (note the underscore before `FILES` — the glob var is
+   `ESP_IDF_GLOB[_XXX]_YYY`). Without it the IDF build uses the ~1 MB default and the Rust app
+   would not fit. Also set `ESP_IDF_SYS_ROOT_CRATE=rust-firmware` (required in a workspace).
+5. **esp-idf-sys patches the IDF tree in place and is not interruption-safe.** It applies
+   `esp_app_format_weak_v4.4.diff` to `/opt/esp-idf-v4.4/components/app_update/esp_app_desc.c`
+   and skips re-applying via a reverse-check. An interrupted first build leaves the patch
+   applied; a rerun then fails with `patch does not apply`. `build.sh` restores the file after
+   a successful build so the shared tree stays pristine for the C firmware (`git checkout --
+   components/app_update/esp_app_desc.c`); if a build was killed mid-way, run the same
+   `git -C /opt/esp-idf-v4.4 checkout -- …` before rebuilding.
 
 ---
 
@@ -497,6 +567,12 @@ IDF binaries are large, this project supplies its own partition table.
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `E0308` in `esp-idf-svc` `tls.rs`/`cstr.rs` (`*const i8` vs `*const u8`) | toolchain now defines `core::ffi::c_char` unsigned on `xtensa-esp32-espidf`; 0.48.1 hardcodes `i8` | use the vendored crate: `[patch.crates-io] esp-idf-svc = { path = "vendor/esp-idf-svc" }` (see Phase 0 findings) |
+| Reboot loop, `***ERROR*** A stack overflow in task main` | default main-task stack (~3.5 KB) too small for std Wi-Fi | `CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384` in `rust/sdkconfig.defaults` |
+| bindgen: `Unable to find libclang` / `ToolNotFound: xtensa-esp-elf-gcc` | only IDF's `export.sh` sourced; espup's `LIBCLANG_PATH`/GCC missing | source `$RUST_ROOT/export-esp.sh` after the IDF export (build.sh does) |
+| `No rule to make target '…/out/partitions.csv'` | custom partition CSV not copied into the esp-idf-sys CMake project | set `ESP_IDF_GLOB_BASE` + `ESP_IDF_GLOB_FILES=partitions.csv` (underscore before `FILES`) |
+| `could not identify the root crate and ESP_IDF_SYS_ROOT_CRATE not specified` | workspace has no single root crate | set `ESP_IDF_SYS_ROOT_CRATE=rust-firmware` |
+| `error: patch failed: components/app_update/esp_app_desc.c` | a killed esp-idf-sys build left the in-place weak patch applied | `git -C /opt/esp-idf-v4.4 checkout -- components/app_update/esp_app_desc.c` and rebuild |
 | `cargo: command not found` in the container | toolchain not provisioned | run `rust/scripts/provision-rust.sh` into the volume |
 | `error: no such command: +esp` | `espup install` missing or toolchain not exported | re-run provision; source `$RUSTUP_HOME/env`, set `CARGO_HOME` |
 | `can't find crate for std` / `build-std` fails | `rust-src` component not installed for `esp` | `rustup component add rust-src --toolchain esp` (provision §4) |

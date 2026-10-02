@@ -9,3 +9,7 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # our own table (rust/partitions.csv) with a 3 MB app.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# std Rust + Wi-Fi/HTTP needs far more stack than the IDF default (~3.5 KB);
+# without this the main task overflows as soon as EspWifi starts.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
