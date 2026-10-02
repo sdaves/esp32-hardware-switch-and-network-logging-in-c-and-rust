@@ -1,5 +1,19 @@
 {
   "image": "mcr.microsoft.com/devcontainers/python:3.13",
+  "mounts": [
+    "source=esp32simulated_esp-rust,target=/opt/esp-rust,type=volume"
+  ],
+  "containerEnv": {
+    "CARGO_HOME": "/opt/esp-rust/cargo",
+    "RUSTUP_HOME": "/opt/esp-rust/rustup"
+  },
+  "remoteEnv": {
+    "CARGO_HOME": "/opt/esp-rust/cargo",
+    "RUSTUP_HOME": "/opt/esp-rust/rustup",
+    "PATH": "/opt/esp-rust/cargo/bin:${containerEnv:PATH}"
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc make pkg-config libudev-dev libssl-dev",
+  "postStartCommand": "bash -lc 'if [ ! -w /opt/esp-rust/cargo ]; then sudo chown -R vscode:vscode /opt/esp-rust; fi'",
   "customizations": {
     "vscode": {
       "settings": {

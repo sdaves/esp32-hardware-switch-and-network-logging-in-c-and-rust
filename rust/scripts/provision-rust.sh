@@ -53,6 +53,14 @@ if ! command -v espflash >/dev/null 2>&1; then
 else
   log "espflash already present"
 fi
+# ldproxy is esp-idf-svc's linker wrapper (it forwards to the Xtensa GCC
+# `gcc`/`ld` with the IDF link script). Required for any firmware build.
+if ! command -v ldproxy >/dev/null 2>&1; then
+  log "cargo install ldproxy"
+  cargo install ldproxy --locked
+else
+  log "ldproxy already present"
+fi
 
 # 3. The `esp` toolchain for the classic ESP32 + the export script.
 EXPORT_FILE="$RUST_ROOT/export-esp.sh"
@@ -65,6 +73,13 @@ fi
 # Make sure the export script exists even if the toolchain was preinstalled.
 if [ ! -f "$EXPORT_FILE" ]; then
   espup install --targets esp32 --export-file "$EXPORT_FILE"
+fi
+# rust-src for the `esp` toolchain: `-Zbuild-std=std,panic_abort` needs it.
+if [ ! -d "$RUSTUP_HOME/toolchains/esp/lib/rustlib/src/rust" ]; then
+  log "rustup component add rust-src --toolchain esp"
+  rustup component add rust-src --toolchain esp
+else
+  log "rust-src already present for esp"
 fi
 
 # 4. wasm target for the iced UI (native + wasm32-unknown-unknown).

@@ -1,3 +1,6 @@
 target/
 dist/
 pkg/
+.embuild/
+sdkconfig
+sdkconfig.old

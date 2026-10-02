@@ -1,3 +1,9 @@
+# Pin the compose project name so the `esp-rust` volume is always
+# `esp32simulated_esp-rust`. Without it, compose names the volume after the
+# host checkout directory, and the devcontainer mount (see
+# .devcontainer/devcontainer.json §4.0) cannot find it.
+name: esp32simulated
+
 services:
   velxio:
     image: ghcr.io/davidmonterocrespo24/velxio:master

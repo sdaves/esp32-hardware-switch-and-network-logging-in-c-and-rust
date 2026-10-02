@@ -1,0 +1,5 @@
+name: Phase 0 hello-world (Rust, esp-idf-svc)
+version: 1
+steps:
+  - wait-serial: "Platform Engine Initializing: Found 0 Autonomous Modules."
+  - wait-serial: "# RUST HELLO (idf 4.4)"

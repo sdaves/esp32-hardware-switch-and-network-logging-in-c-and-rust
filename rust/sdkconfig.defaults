@@ -1,0 +1,11 @@
+# Rust firmware sdkconfig defaults. Consumed by esp-idf-sys via
+# ESP_IDF_SDKCONFIG_DEFAULTS / SDKCONFIG_DEFAULTS (see rust/scripts/build.sh).
+#
+# The Velxio QEMU machine is fixed at 4 MB flash and boots an ESP-IDF layout.
+CONFIG_IDF_TARGET="esp32"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# A std + IDF binary exceeds the default ~1 MB factory partition, so supply
+# our own table (rust/partitions.csv) with a 3 MB app.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"

@@ -1,0 +1,20 @@
+# Target-specific settings for the ESP32 firmware.
+#
+# Deliberately *no* `[build] target` here, so host-side `cargo test` (the pure
+# tea-core crates) still builds for the desktop. Firmware builds pass
+# `--target xtensa-esp32-espidf` explicitly (rust/scripts/build.sh).
+[target.xtensa-esp32-espidf]
+# ldproxy forwards to the Xtensa GCC that `espup` installed; it also applies
+# the ESP-IDF link script.
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+# ESP-IDF v4.4 uses a 32-bit time_t. The cfg must be espidf_time32 on v4.4
+# (espidf_time64 is for IDF 5.0+); the wrong one breaks libc/time_t.
+rustflags = ["--cfg", "espidf_time32"]
+
+# `-Zbuild-std=std,panic_abort` needs rust-src for the `esp` toolchain.
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32"

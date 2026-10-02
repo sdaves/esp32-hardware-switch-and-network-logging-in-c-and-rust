@@ -1,0 +1,26 @@
+# Rust port workspace (see docs/runbooks/add_rust_embassy_port.md).
+#
+# `crates/firmware` is the std `esp-idf-svc` shell and is built with the `esp`
+# toolchain for `xtensa-esp32-espidf` (see rust/scripts/build.sh). Host-side
+# crates (pure `tea-core`, tests, iced UI) are added in later phases.
+[workspace]
+resolver = "2"
+members = ["crates/firmware"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[profile.release]
+opt-level = "s"
+debug = false
+
+# esp-idf-svc 0.48.1 predates the toolchain switch that made `core::ffi::c_char`
+# unsigned on `xtensa-esp32-espidf` (bindgen now emits `*const c_char` = u8 while
+# the crate hardcodes `*const i8`). Vendor the crate and use `c_char` instead of
+# `i8` for the handful of affected casts; everything else stays 0.48.1 so the
+# IDF 4.4 radio support is unchanged. See rust/vendor/esp-idf-svc/CHANGES.md.
+[patch.crates-io]
+esp-idf-svc = { path = "vendor/esp-idf-svc" }

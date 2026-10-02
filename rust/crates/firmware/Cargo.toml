@@ -1,0 +1,22 @@
+[package]
+name = "rust-firmware"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# `harness = false` keeps the built-in test harness from being injected into the
+# firmware binary (and silences rust-analyzer errors).
+[[bin]]
+name = "rust-firmware"
+path = "src/main.rs"
+harness = false
+
+[dependencies]
+# Pinned to the last line that still supports ESP-IDF v4.4 (see runbook §1).
+# 0.49.0 deprecated v4.4; current releases test only IDF 5.1+.
+esp-idf-svc = "=0.48.1"
+log = "0.4"
+
+[build-dependencies]
+embuild = "=0.31.3"

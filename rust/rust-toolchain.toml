@@ -1,0 +1,6 @@
+# Host toolchain pin. Firmware builds select the Espressif fork explicitly with
+# `cargo +esp` (rust/scripts/build.sh), which overrides this file; keeping the
+# default on stable lets `cargo test` run the pure crates on the desktop.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
