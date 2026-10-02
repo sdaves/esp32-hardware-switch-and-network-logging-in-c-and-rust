@@ -1,0 +1,379 @@
+# Runbook: Port the platform to Rust (Embassy + iced)
+
+Status: planned
+Audience: firmware maintainers and coding agents
+Scope: stand up a self-contained `rust/` workspace that reimplements the C platform in Rust —
+an Embassy/`esp-hal` firmware for the classic ESP32, a native host simulator, and an iced
+browser dashboard — without editing the C project (one compose-volume exception, §8).
+
+This runbook is a set of instructions. It is **not executed by tooling**. It is phased; each
+phase is a checkpoint and must be run to completion before the next. **Do not port a use case
+before the Phase 0 gate passes.**
+
+---
+
+## 0. How to run this runbook
+
+- Trigger it by asking an agent to "run `docs/runbooks/add_rust_embassy_port.md`".
+- Optionally name a phase: *"run Phase 1 of the rust port runbook"* (`PHASE=1`).
+- If no phase is named, start at the first incomplete phase.
+- Phases are ordered and gated: Phase 0 decides the emulator strategy for everything after it.
+- All file writes go under `rust/` (plus the one compose edit in §8). Never modify `main/`,
+  `test/`, `scripts/`, or `tests/velxio/` — reuse the last read-only.
+- Build/run firmware and emulator work happens **inside the Velxio container**, driven through
+  the host listener (`curl http://host.docker.internal:2222/...`); see `AGENTS.md` §5–§6.
+
+---
+
+## 1. Stack decision (why Embassy, why iced is only a client)
+
+- **Embassy is correct.** `esp-hal` 1.2.x supports the classic ESP32 as target
+  `xtensa-esp32-none-elf`; Embassy is the async runtime integrated into it (`esp-rtos` +
+  `embassy-executor`). Wi-Fi and TCP come from `esp-radio` + `embassy-net`. This is the
+  most-supported Rust embedded backend.
+- **iced cannot run on the MCU.** iced is a desktop/browser GUI (native + `wasm32`). It is the
+  **network client/dashboard** that connects to the ESP running Embassy; it is not firmware.
+  The firmware therefore needs a small HTTP/WebSocket server for iced to reach (Phase 3).
+- The C project's "Elm Architecture" maps cleanly to Rust enums and to iced's Elm model: keep
+  one pure TEA core (`tea-core`) shared by every shell.
+
+### Toolchain reality (measured)
+
+The Velxio container is **aarch64** and ships **no Rust** (`rustc`, `cargo`, `rustup`,
+`espflash` are all missing). Xtensa needs the Espressif rustc fork, the LLVM fork, and a GCC
+linker, installed by `espup`. This is provisioned at runtime, never in the image.
+
+```
+uname -m          -> aarch64
+rustc/cargo/...   -> MISSING
+curl/gcc/make     -> present
+/workspace avail  -> ~49 GB
+```
+
+---
+
+## 2. Constraints and locked decisions
+
+| Decision | Value |
+|---|---|
+| Firmware runtime | Embassy + `esp-hal` (`xtensa-esp32-none-elf`) |
+| UI runtime | iced, native + `wasm32-unknown-unknown`, network client only |
+| First increment | pure core + event bus + **UC-1** |
+| Toolchain persistence | **Docker named volume** (accepted; requires the §8 compose edit) |
+| C project edits | **none**, except the §8 compose volume/mount |
+| Emulator harness | reuse `tests/velxio/` runner + `diagram.json` **read-only** |
+| Fallback if Rust Wi-Fi won't run in Velxio | deferred shell, **not** a second full firmware (§12) |
+
+---
+
+## 3. Target workspace layout
+
+```
+rust/
+├── Cargo.toml                 # workspace
+├── rust-toolchain.toml        # xtensa/esp toolchain pin
+├── .cargo/config.toml         # xtensa target, build-std, espflash runner
+├── Makefile                   # provision / build / test / wasm / sim / scenario
+├── .gitignore                 # target/, dist/, pkg/, .toolchain/
+├── crates/
+│   ├── tea-core/              # no_std pure TEA (model/msg/cmd/update), all use cases
+│   ├── tea-platform/          # no_std event bus + module trait + registry
+│   ├── firmware/              # no_std embassy+esp-hal bin (plugins live here)
+│   ├── host/                  # std CLI simulator + cargo integration tests
+│   └── ui/                    # iced app (native + wasm32) that connects to the device
+├── scripts/
+│   ├── provision-rust.sh      # rustup + espup + espflash + wasm target, idempotent
+│   ├── build.sh               # cargo +esp build -> dist/firmware.merged.bin (4 MB)
+│   ├── test.sh                # cargo test + velxio scenarios on the rust bin
+│   └── wasm.sh                # trunk build of ui
+└── dist/                      # merged bin artifacts (gitignored)
+```
+
+`tea-core` and `tea-platform` compile both `no_std` (firmware) and with `std` (host/iced), so
+the same logic is unit-tested on the desktop and shipped to silicon.
+
+---
+
+## 4. Phase 0 — Provisioning and feasibility spikes (the gate)
+
+Do this before porting anything. It de-risks the entire project in about a day.
+
+1. **Provision** (idempotent, mirrors `scripts/provision-idf44.sh`):
+   `rust/scripts/provision-rust.sh` installs rustup (aarch64), `cargo install espup espflash`,
+   `espup install --targets esp32`, and adds the `wasm32-unknown-unknown` target. All roots
+   point at the named volume (§8), so `down`/`up` does not re-download.
+2. **Hello-world spike.** In `/tmp`, `cargo install esp-generate` and
+   `esp-generate --chip esp32 hello`, build it, and produce a merged 4 MB image. Boot it in
+   Velxio through the **existing** runner:
+   ```sh
+   python3 -m tests.velxio.runner.run_scenario \
+     --server ws://localhost \
+     --firmware /tmp/hello/dist/firmware.merged.bin \
+     --diagram tests/velxio/diagram.json \
+     --scenario tests/velxio/scenarios/uc1_button_toggle.yaml   # temporary; expect a marker
+   ```
+   Confirm the app boots and emits serial.
+3. **aarch64 gate.** Confirm the Espressif Rust fork publishes an **aarch64** host build
+   (high confidence; `openocd-esp32-linux-arm64` already exists in the image). If not, stop and
+   reassess before writing code.
+4. **Wi-Fi spike.** Build a minimal `esp-radio` + `embassy-net` DHCP + HTTP-GET image and boot
+   it in Velxio. Record whether the fork's radio comes up at all.
+
+### Phase 0 gate outcome
+
+| Spike | Result | Consequence |
+|---|---|---|
+| hello-world boots in Velxio | pass | proceed; GPIO/UART parity is viable |
+| `esp-radio` Wi-Fi boots in Velxio | pass | **one** Embassy firmware serves all three surfaces |
+| `esp-radio` Wi-Fi fails in Velxio | expected | apply §12: Embassy stays real-HW-only; UC-1 for the emulator; UC-5 host-tested |
+
+Record the raw boot serial for both spikes in the Phase 0 notes so the decision is auditable.
+
+---
+
+## 5. Phase 1 — Core + UC-1 (the first increment)
+
+Mirror the C modules exactly; the only real end-to-end features are **UC-1** (GPIO) and
+**UC-5** (UART → Wi-Fi HTTP). UC-2/3/4 are logic-only stubs in C (empty `commands.c`, no
+producer), so port them as `tea-core` modules so the banner still reports five.
+
+### 5.1 `tea-core` (pure, `no_std`, no heap)
+
+Transliterate `logic.c` by value:
+
+```rust
+// crates/tea-core/src/toggle_led.rs  (UC-1)
+pub enum Msg { ButtonDown }
+pub enum Cmd { None, ToggleLed { pin: u8, level: u8 } }
+pub struct Model { pub led_on: bool }
+pub struct UpdateResult { pub next: Model, pub command: Cmd }
+
+pub fn init() -> Model { Model { led_on: false } }
+
+pub fn update(model: Model, msg: Msg) -> UpdateResult {
+    match msg {
+        Msg::ButtonDown => {
+            let led_on = !model.led_on;
+            UpdateResult {
+                next: Model { led_on },
+                command: Cmd::ToggleLed { pin: 2, level: led_on as u8 },
+            }
+        }
+    }
+}
+```
+
+Add the UC-2..UC-5 equivalents from `read-analog-sensor`, `fetch-and-save`, `read-and-insert`,
+`fetch-and-uart` logic. Exhaustive `match` replaces `-Wswitch-enum`: never write `_ =>`.
+
+### 5.2 `tea-platform` (event bus + registry)
+
+- `SystemEventId` — the same five events as `main/registry.h`.
+- `PlatformEvent` — one enum carrying typed payloads per event, replacing the C
+  `memcpy`/size-matched byte block. Typed matching removes the whole
+  "declared message size must equal payload size" failure class.
+- `PlatformModule` trait mirroring the C vtable:
+  `name()`, `init_hardware()`, `poll_timer_tick()`, `wire_subscriptions(queue)`, `process(event)`.
+- Bus = `embassy-sync::channel::Channel<CriticalSectionRawMutex, PlatformEvent, 8>` with a
+  static subscription table. The same code runs on the host via the `std` critical-section
+  impl, so the bus is tested natively too.
+- **Autonomous registration:** primary `linkme::distributed_slice` as the `USE_CASE_REGISTER`
+  equivalent. If the esp-hal linker script drops the linkme sections, fall back to a
+  `register_modules!` macro that collects `&'static [&'static dyn PlatformModule]` (one macro
+  list; reliable, at the cost of the C project's linker-reflected autonomy).
+
+### 5.3 `firmware` (Embassy shell, mirrors `main.c`)
+
+- `#[esp_hal::main]` + `embassy-executor`; GPIO0 button, GPIO2 LED.
+- Copy the edge-detect + release re-arm from `toggle-physical-led/setup.c` exactly (fire once on
+  high→low, latch until high), with a 100 ms tick.
+- Print the same serial markers so existing expectations match:
+  `Platform Engine Initializing: Found 5 Autonomous Modules.`,
+  `# LED ON (gpio 2)`, `# LED OFF (gpio 2)`.
+- Use `esp-println`/`esp-backtrace`.
+
+### 5.4 `host` (std CLI simulator + tests)
+
+- `cargo test` replaces `make -C test`:
+  - unit: `init()` is off; `ButtonDown` → `ToggleLed { pin: 2, level: 1 }` (mirrors
+    `test/test_toggle_led.c`);
+  - integration: single subscriber, broadcast to two, and non-matching event ignored (mirrors
+    `test/test_event_bus.c`).
+- A `host` binary that drives the bus from scripted input — the "CLI sim".
+
+### 5.5 `rust/scripts/test.sh`
+
+1. `cargo test` (host crates);
+2. `cargo +esp build --release` → `dist/firmware.merged.bin` (see §9);
+3. run the existing runner against the **Rust** bin:
+   ```sh
+   python3 -m tests.velxio.runner.run_scenario \
+     --server "${VELXIO_WS:-ws://localhost}" \
+     --firmware rust/dist/firmware.merged.bin \
+     --diagram tests/velxio/diagram.json \
+     --scenario tests/velxio/scenarios/uc1_button_toggle.yaml
+   ```
+
+**Phase 1 done when:** `cargo test` passes, the boot banner reports five modules, and
+`uc1_button_toggle.yaml` prints `RESULT: PASS` with the Rust bin.
+
+---
+
+## 6. Phase 2 — UC-2..UC-5 and full parity
+
+- **UC-5** is the real chain. Reproduce the C behavior and markers:
+  button (GPIO4) → `# UART SENT` → Wi-Fi connect → HTTP GET
+  `http://192.168.4.2:8000/` → `-> status 200` / `# HTTP BODY` → `# NETWORK SYNCED`.
+  Use `esp-radio` + `embassy-net` + an HTTP client (`reqwless` or similar).
+- **UC-2/3/4** — port `tea-core` logic; keep command execution a no-op unless the C side is
+  upgraded (in C they are empty). Their purpose is module-count parity and native tests.
+- **Emulator Wi-Fi** is the uncertain part. Apply the Phase 0 gate outcome:
+  - pass → run `fetch_and_uart.yaml` against the Rust bin;
+  - fail → keep Embassy for real hardware, scope emulator parity to UC-1, and cover UC-5 with
+    host tests + real-hardware verification (§12).
+
+---
+
+## 7. Phase 3 — iced dashboard
+
+This phase is deferred until Phases 1–2 are green.
+
+- `crates/ui`: one iced app, native + `wasm32-unknown-unknown` via `trunk` (`rust/scripts/wasm.sh`),
+  served as static assets.
+- Add a small server to the firmware (`embassy-net` + `picoserve` or an Embassy WebSocket
+  server). The iced app subscribes to events and publishes the same logical messages the
+  use cases consume.
+- Target real hardware (connect to the device's LAN IP). Browser → slirp-guest connectivity
+  under Velxio is **unsolved**; do not block Phase 3 on it.
+
+---
+
+## 8. The one edit outside `rust/` (container toolchain persistence)
+
+The named-volume decision requires adding a volume and mount to root `docker-compose.yaml` so
+the aarch64 Xtensa toolchain survives `down`/`up`, exactly like `idf44:/opt/esp-idf-v4.4`:
+
+```yaml
+    volumes:
+      - ./:/workspace
+      - idf44:/opt/esp-idf-v4.4
+      - esp-rust:/opt/esp-rust
+# ...
+volumes:
+  idf44:
+  esp-rust:
+```
+
+`rust/scripts/provision-rust.sh` must export `RUSTUP_HOME=/opt/esp-rust/rustup`,
+`CARGO_HOME=/opt/esp-rust/cargo`, and route espup's GCC/`~/.espressif` under `/opt/esp-rust`
+as well, so **all** toolchain state lands in the volume. `rust/Makefile` sets these env vars on
+every target.
+
+> If a hard "no root edits" rule is later required, the alternative is `RUSTUP_HOME`/`CARGO_HOME`
+> under `rust/.toolchain` (bind-mounted, gitignored). It persists on the host and needs no
+> compose change, but scatters the toolchain into the repo instead of a volume.
+
+The host listener has no Rust route; drive Rust builds through `/exec`:
+
+```sh
+curl -sS --max-time 2400 -G \
+  --data-urlencode 'cmd=cd /workspace/rust && make provision' \
+  http://host.docker.internal:2222/exec
+curl -sS --max-time 2400 -G \
+  --data-urlencode 'cmd=cd /workspace/rust && make test' \
+  http://host.docker.internal:2222/exec
+```
+
+---
+
+## 9. Build → merged 4 MB bin
+
+The QEMU machine is fixed at 4 MB and boots an ESP-IDF layout (loaded at offset `0x0`). The Rust
+app is linked at `0x10000` and needs a bootloader and partition table.
+
+1. `cargo +esp build --release --target xtensa-esp32-none-elf` (with
+   `build-std = ["core", "alloc"]` in `rust/.cargo/config.toml`).
+2. Produce the merged image with `espflash` (bundled IDF-compatible bootloader/partition table),
+   or by merging the `esp-bootloader-esp-idf` bootloader + partition table + app with the
+   container's `esptool.py`:
+   ```sh
+   python "$ESPTOOL" --chip esp32 merge_bin \
+     --output "$PWD/dist/firmware.merged.bin" --fill-flash-size 4MB \
+     0x1000  build/bootloader.bin \
+     0x8000  build/partition-table.bin \
+     0x10000 build/app.bin
+   ```
+   Any of these must yield a 4 MB (`0x400000`) file — verify with `stat -c '%s'`.
+3. `espflash save-image --merge` is the preferred one-liner; mirror `scripts/build.sh`'s
+   absolute-`-o` rule (a relative `-o` inside `build/` becomes `build/build/...`).
+
+---
+
+## 10. Definition of done (mirrors `AGENTS.md` §6.5)
+
+1. `cd rust && make test` → all `cargo test` targets pass.
+2. `make build` exits 0; the boot serial contains
+   `Platform Engine Initializing: Found 5 Autonomous Modules.`
+3. The emulator scenario(s) in scope print `RESULT: PASS` for the **Rust** bin.
+4. No warnings under `cargo clippy -- -D warnings`.
+5. `dist/firmware.merged.bin` is exactly 4 MB and boots in Velxio.
+6. Nothing outside `rust/` (plus the §8 volume) changed: `git status` shows no `main/`, `test/`,
+   `scripts/`, or `tests/` modifications.
+
+---
+
+## 11. Failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `cargo: command not found` in the container | toolchain not provisioned | run `rust/scripts/provision-rust.sh` into the volume |
+| `error: no such command: +esp` | `espup install` missing or toolchain not exported | re-run provision; source `$RUSTUP_HOME/env`, set `CARGO_HOME` |
+| Xtensa toolchain has no aarch64 build | host triple unsupported | stop; reassess (Phase 0.3 gate) |
+| Rust image does not boot in Velxio | fork expects IDF-4.4 boot/PHY | Phase 0 gate: keep Embassy for real HW, emulator scope reduced |
+| USB/TCP Wi-Fi never associates in Velxio | fork radio only models IDF 4.4 PHY | expected; see §12 |
+| `linkme` sections dropped / zero modules | esp-hal linker script | use `register_modules!` fallback (§5.2) |
+| Fewer than five modules in the banner | a plugin not registered | verify the distributed-slice tag / macro list entry |
+| merged image ≠ 4 MB or fails to boot | missing bootloader/partition table or padding | re-merge with `--fill-flash-size 4MB` (§9) |
+| `merge-bin` writes `build/build/...` | relative `-o` under `build/` | pass an absolute `-o` (§9) |
+| Listener HTTP 503 | a build/test is already running | wait; requests are serialised |
+| Listener 404 for a route in the file | host is running a stale listener process | restart `.devcontainer/docker-build-listener.py` on the host |
+
+---
+
+## 12. Risk register and the fallback decision
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Velxio fork won't boot an `esp-hal` image at all | blocks all emulator parity | Phase 0.2 gate before porting |
+| `esp-radio` Wi-Fi incompatible with fork (IDF-4.4-PHY-only) | UC-5 never runs in emulator | Phase 0.4 gate; fallback below |
+| aarch64 Xtensa toolchain unavailable | blocks builds | Phase 0.3 gate |
+| `linkme` sections dropped | no autonomous registration | `register_modules!` macro fallback |
+| Browser iced cannot reach the slirp guest | UI only works on real HW | scope the UI to real hardware/LAN; leave emulator UI open |
+
+**Fallback (locked): single core, staged shells — do not build two firmwares up front.** If the
+Phase 0 Wi-Fi spike fails:
+1. Embassy remains the **only real-hardware** firmware.
+2. Emulator/browser parity is scoped to **UC-1** (the emulator reliably models GPIO).
+3. UC-5 stays fully covered by **host `cargo test`** (pure logic) + real-hardware verification.
+4. Only if emulator Wi-Fi later becomes a hard requirement, add a thin `esp-idf-svc` (std,
+   linking the container's existing IDF 4.4 tree) shell that reuses `tea-core`/`tea-platform`
+   and swaps only commands/hardware. It is a bounded addition, not a fork.
+
+Rationale: two shells double the embedding surface for zero extra logic value; the shared core
+makes deferring safe.
+
+---
+
+## 13. References
+
+- `AGENTS.md` §3 (module responsibilities), §5 (Velxio emulator), §6 (iteration, listener,
+  WebSocket protocol, troubleshooting).
+- `main/main.c`, `main/registry.{c,h}` — the engine shell and bus contract to mirror.
+- `main/use_cases/toggle-physical-led/` — UC-1 reference (logic + edge-detect poll).
+- `main/use_cases/fetch-and-uart/` — UC-5 reference (UART → Wi-Fi HTTP chain and markers).
+- `test/test_toggle_led.c`, `test/test_event_bus.c` — host test references.
+- `tests/velxio/scenarios/uc1_button_toggle.yaml`, `tests/velxio/scenarios/fetch_and_uart.yaml`.
+- `scripts/build.sh`, `scripts/test.sh`, `scripts/provision-idf44.sh` — build/provision patterns.
+- `docs/runbooks/add_use_case.md`, `docs/runbooks/add_testing_simulator.md`.
+- Espressif: *The Rust on ESP Book* (toolchain/`espup`), `esp-hal` (`esp-radio`,
+  `embassy-executor`), `espflash` `save-image`.
