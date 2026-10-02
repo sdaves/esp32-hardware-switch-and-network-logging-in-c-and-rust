@@ -13,30 +13,49 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PIDFILE="${TMPDIR:-/tmp}/velxio-http8000.pid"
+LOG="${TMPDIR:-/tmp}/velxio-http8000.log"
+
+alive() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
 
 start() {
-  if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  if alive; then
     echo "dev-http-server: already running (pid $(cat "$PIDFILE"))"
     return 0
   fi
-  nohup python3 scripts/dev-http-server.py >/tmp/velxio-http8000.log 2>&1 &
-  echo $! > "$PIDFILE"
-  sleep 0.5
-  echo "dev-http-server: started (pid $(cat "$PIDFILE")) on :8000"
+  # `setsid` puts the server in its own session so it is not attached to the
+  # caller's stdio/process group. Without this, a server started from
+  # `docker compose exec` (e.g. scripts/test.sh) keeps the exec's output pipe
+  # open, so the exec never sees EOF and `make test` hangs. stdin from
+  # /dev/null and both streams to a file close every inherited descriptor.
+  setsid bash -c "echo \$\$ > '$PIDFILE'; exec python3 scripts/dev-http-server.py" \
+    </dev/null >"$LOG" 2>&1 &
+  # Wait until the pidfile exists and the port actually accepts a connection.
+  for _ in $(seq 1 50); do
+    if alive && (exec 3<>/dev/tcp/127.0.0.1/8000) 2>/dev/null; then
+      exec 3>&- 2>/dev/null || true
+      echo "dev-http-server: started (pid $(cat "$PIDFILE")) on :8000"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "dev-http-server: failed to start (see $LOG)" >&2
+  return 1
 }
 
 stop() {
-  if [ -f "$PIDFILE" ]; then
+  if alive; then
     kill "$(cat "$PIDFILE")" 2>/dev/null || true
-    rm -f "$PIDFILE"
-    echo "dev-http-server: stopped"
-  else
-    echo "dev-http-server: not running"
   fi
+  # Also catch a stray instance that lost its pidfile.
+  pkill -f "dev-http-server.py" 2>/dev/null || true
+  rm -f "$PIDFILE"
+  echo "dev-http-server: stopped"
 }
 
 status() {
-  if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  if alive; then
     echo "dev-http-server: running (pid $(cat "$PIDFILE"))"
   else
     echo "dev-http-server: not running"
@@ -47,6 +66,7 @@ status() {
 case "${1:-start}" in
   start) start ;;
   stop) stop ;;
+  restart) stop; start ;;
   status) status ;;
-  *) echo "usage: $0 start|stop|status" >&2; exit 2 ;;
+  *) echo "usage: $0 start|stop|restart|status" >&2; exit 2 ;;
 esac

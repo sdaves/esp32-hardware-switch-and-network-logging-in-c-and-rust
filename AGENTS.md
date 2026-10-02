@@ -129,17 +129,19 @@ only importable with that working directory). Ports: host `3080 → nginx :80`, 
 ambient v5 `IDF_PATH` first), sets target `esp32` once, builds, then merges a 4 MB flash image
 with the bundled `esptool.py merge_bin --fill-flash-size 4MB`.
 
-The image does **not** ship v4.4.7; it is installed into the running container once (survives
-`docker compose restart`, lost on `down`/`up --build`):
+The image does **not** ship v4.4.7, so `docker-compose.yaml` provisions it on container start via
+`scripts/provision-idf44.sh` (idempotent: clones only if missing, then runs `install.sh esp32`).
+The ~2 GB tree lives in the `idf44` named volume at `/opt/esp-idf-v4.4`, so it survives
+`down`/`up`; `down -v` (or deleting the volume) triggers a fresh provision on the next start. The
+first start therefore clones and installs for a few minutes before the backend comes up.
+
+To provision by hand instead:
 
 ```sh
-git clone -b v4.4.7 --depth 1 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf-v4.4
-/opt/esp-idf-v4.4/install.sh esp32
+scripts/provision-idf44.sh
 ```
 
-The clone is ~2 GB and takes several minutes; `install.sh` fetches the v4.4 Xtensa toolchain and
-its own Python env (`idf4.4_py3.12_env`). Without this tree, `build.sh` falls back to v5.5 and
-UC-5's Wi-Fi crashes in `esp_phy_enable`.
+Without the v4.4 tree, `build.sh` falls back to v5.5 and UC-5's Wi-Fi crashes in `esp_phy_enable`.
 
 `test.sh` runs `make -C test`, then `build.sh`, then starts `scripts/dev-http-server.sh` (so
 UC-5's Wi-Fi GET has an endpoint on

@@ -5,10 +5,22 @@ services:
     working_dir: /workspace
     volumes:
       - ./:/workspace
+      # Persist the ~2 GB ESP-IDF v4.4.7 tree across container recreation so a
+      # `down`/`up` does not re-clone it. `down -v` (or deleting the volume)
+      # triggers a fresh provision on the next start.
+      - idf44:/opt/esp-idf-v4.4
     ports:
       - "3080:80"
       - "8001:8001"
     entrypoint: ["/bin/bash", "-lc"]
     command:
-      - "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq --no-install-recommends gcc make libc6-dev >/dev/null 2>&1 || true; python3 -m pip install --no-cache-dir --quiet websockets pyyaml || pip3 install --no-cache-dir --quiet websockets pyyaml; cd /app && exec ./entrypoint.sh"
+      - >
+        export DEBIAN_FRONTEND=noninteractive;
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends gcc make libc6-dev git >/dev/null 2>&1 || true;
+        python3 -m pip install --no-cache-dir --quiet websockets pyyaml || pip3 install --no-cache-dir --quiet websockets pyyaml;
+        bash /workspace/scripts/provision-idf44.sh;
+        cd /app && exec ./entrypoint.sh
     restart: unless-stopped
+
+volumes:
+  idf44:

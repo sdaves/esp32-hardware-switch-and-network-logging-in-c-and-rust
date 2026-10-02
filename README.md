@@ -54,8 +54,15 @@ tick, and dispatches queue items to each plugin's pure update function.
 | **Host** (PC / NAS / server) | Docker + Docker Compose. Runs the Velxio image (ESP-IDF v5.5, Xtensa toolchain, QEMU, nginx). |
 | **This devcontainer** | Python 3 and `curl` only. It has **no Docker daemon**, so builds and emulator runs go through the host listener. |
 
-The Velxio image ships ESP-IDF and QEMU but **no host C compiler**; the Compose
-startup installs `gcc make libc6-dev` plus the Python test deps on each start.
+The Velxio image ships ESP-IDF (v5.x) and QEMU but **no host C compiler**, so the
+Compose startup installs `gcc make libc6-dev` and the Python test deps. It also
+provisions **ESP-IDF v4.4.7** into a named volume (`scripts/provision-idf44.sh`)
+for the emulated ESP32 Wi-Fi build — the first start after a fresh clone or
+`down -v` takes a few minutes to clone and install it, then it is cached.
+
+The devcontainer is entirely described by `.devcontainer/devcontainer.json` (base
+image + features) and rebuilds itself on a new machine; it needs no repo-specific
+setup beyond Python/`curl`, since all firmware work happens on the host stack.
 
 ---
 
@@ -195,14 +202,10 @@ answers a deterministic `200` stub so `make test` still passes
 > **Board and toolchain note.** The QEMU fork only models a Wi-Fi radio on the
 > **classic ESP32**, and only under **ESP-IDF 4.4** (IDF 5.x's `esp_phy_enable`
 > asserts on a register the fork lacks). The project therefore targets `esp32`
-> and `scripts/build.sh` uses an ESP-IDF v4.4.7 tree at `/opt/esp-idf-v4.4` when
-> present. The image does not ship it, so install it once into the running
-> container (lost on `docker compose up --build`):
->
-> ```sh
-> git clone -b v4.4.7 --depth 1 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf-v4.4
-> /opt/esp-idf-v4.4/install.sh esp32
-> ```
+> and `scripts/build.sh` uses an ESP-IDF v4.4.7 tree at `/opt/esp-idf-v4.4`. The
+> image does not ship it, so `docker-compose.yaml` provisions it on container
+> start (via `scripts/provision-idf44.sh`) into the `idf44` named volume — the
+> first `make up` after `down -v` clones and installs for a few minutes.
 >
 > Two buttons are wired: BOOT (GPIO0) drives UC-1, NET (GPIO4) drives UC-5.
 
