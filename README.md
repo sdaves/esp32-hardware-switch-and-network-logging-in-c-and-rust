@@ -184,7 +184,7 @@ reading the pin. Input injection (`esp32_gpio_in`) does work.
 
 UC-5 does a **real Wi-Fi + HTTP fetch**: pressing its NET button (GPIO4) joins
 the emulator's `Espressif` AP, gets an IP, and `GET`s
-`http://192.168.4.2:8000/editor` (the slirp gateway, i.e. this container).
+`http://192.168.4.2:8000/` (the slirp gateway, i.e. this container).
 `scripts/dev-http-server.py` is a reverse proxy: it forwards that request to the
 parent machine at `http://host.docker.internal:8000` and returns the real
 response. The scenario asserts `# WIFI CONNECTED`, `-> status 200`, a response
@@ -196,8 +196,15 @@ answers a deterministic `200` stub so `make test` still passes
 > **classic ESP32**, and only under **ESP-IDF 4.4** (IDF 5.x's `esp_phy_enable`
 > asserts on a register the fork lacks). The project therefore targets `esp32`
 > and `scripts/build.sh` uses an ESP-IDF v4.4.7 tree at `/opt/esp-idf-v4.4` when
-> present. Two buttons are wired: BOOT (GPIO0) drives UC-1, NET (GPIO4) drives
-> UC-5.
+> present. The image does not ship it, so install it once into the running
+> container (lost on `docker compose up --build`):
+>
+> ```sh
+> git clone -b v4.4.7 --depth 1 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf-v4.4
+> /opt/esp-idf-v4.4/install.sh esp32
+> ```
+>
+> Two buttons are wired: BOOT (GPIO0) drives UC-1, NET (GPIO4) drives UC-5.
 
 ---
 
@@ -260,7 +267,7 @@ because it is the only board whose emulated QEMU machine has a Wi-Fi radio.
 
 ### Notes
 
-- UC-5's fetch targets `http://192.168.4.2:8000/editor`, the slirp gateway (the
+- UC-5's fetch targets `http://192.168.4.2:8000/`, the slirp gateway (the
   container), which reverse-proxies to the parent machine at
   `http://host.docker.internal:8000` (`VELXIO_PROXY_UPSTREAM` to override).
   Make sure the proxy is up: `./scripts/dev-http-server.sh start` (the headless
@@ -272,6 +279,11 @@ because it is the only board whose emulated QEMU machine has a Wi-Fi radio.
 - The firmware must be built with the ESP-IDF v4.4.7 tree (`scripts/build.sh`
   does this automatically when `/opt/esp-idf-v4.4` is present); an IDF 5.x build
   crashes the emulated ESP32 radio in `esp_phy_enable`.
+- If you run your own server on the host's `:8000` (e.g. as the proxy upstream),
+  stop VS Code from forwarding the container's `:8000`: add
+  `"8000": { "onAutoForward": "ignore" }` to `remote.portsAttributes` in
+  `.devcontainer/devcontainer.json`, remove the port from the Ports panel, and
+  reload the window. Otherwise VS Code keeps tunneling `:8000` and collides.
 - To iterate, `make build` again and re-upload the new `.bin`; no editor project
   changes are needed.
 - The `.vlx` mirrors `tests/velxio/diagram.json`. If you change the circuit,

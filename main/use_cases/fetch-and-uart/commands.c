@@ -23,7 +23,7 @@
  * an uploaded prebuilt .bin associates without any in-editor SSID rewrite. */
 #define FETCH_AND_UART_WIFI_SSID "Espressif"
 #define FETCH_AND_UART_WIFI_PASS ""
-#define FETCH_AND_UART_URL       "http://192.168.4.2:8000/editor"
+#define FETCH_AND_UART_URL       "http://192.168.4.2:8000/"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1

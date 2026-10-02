@@ -127,8 +127,22 @@ only importable with that working directory). Ports: host `3080 → nginx :80`, 
 ### `scripts/build.sh` / `scripts/test.sh`
 `build.sh` prefers an **ESP-IDF v4.4.7** tree at `/opt/esp-idf-v4.4` (clearing the container's
 ambient v5 `IDF_PATH` first), sets target `esp32` once, builds, then merges a 4 MB flash image
-with the bundled `esptool.py merge_bin --fill-flash-size 4MB`. `test.sh` runs `make -C test`,
-then `build.sh`, then starts `scripts/dev-http-server.sh` (so UC-5's Wi-Fi GET has an endpoint on
+with the bundled `esptool.py merge_bin --fill-flash-size 4MB`.
+
+The image does **not** ship v4.4.7; it is installed into the running container once (survives
+`docker compose restart`, lost on `down`/`up --build`):
+
+```sh
+git clone -b v4.4.7 --depth 1 --recursive https://github.com/espressif/esp-idf.git /opt/esp-idf-v4.4
+/opt/esp-idf-v4.4/install.sh esp32
+```
+
+The clone is ~2 GB and takes several minutes; `install.sh` fetches the v4.4 Xtensa toolchain and
+its own Python env (`idf4.4_py3.12_env`). Without this tree, `build.sh` falls back to v5.5 and
+UC-5's Wi-Fi crashes in `esp_phy_enable`.
+
+`test.sh` runs `make -C test`, then `build.sh`, then starts `scripts/dev-http-server.sh` (so
+UC-5's Wi-Fi GET has an endpoint on
 the container's `:8000`), then runs **every** scenario in `tests/velxio/scenarios/*.yaml` in
 filename order (a failing scenario aborts the run). This is the definition of `make test`: native
 tests + firmware build + the full emulator scenario suite. Adding a use case's YAML under
@@ -138,7 +152,7 @@ them to target the host-published ports.
 
 ### `scripts/dev-http-server.{sh,py}`
 A reverse proxy on the container's `:8000`. The QEMU guest reaches the container at the slirp
-gateway `192.168.4.2`, so UC-5's firmware does `GET http://192.168.4.2:8000/editor`; the server
+gateway `192.168.4.2`, so UC-5's firmware does `GET http://192.168.4.2:8000/`; the server
 forwards the request to the parent machine at `VELXIO_PROXY_UPSTREAM` (default
 `http://host.docker.internal:8000`) and returns its real response. If the parent is unreachable,
 it answers with a deterministic `200` stub (`VELXIO_PROXY_FALLBACK=1`, the default) so
@@ -253,6 +267,11 @@ Verify: the boot log must read `Platform Engine Initializing: Found 5 Autonomous
   id to a board GPIO by walking `connections`; it ignores power pins (`GND*`, `VIN*`, `3V3*`,
   `5V*`, `EN`) and prefers numeric pins. A part wired to the board only through a passive (e.g. an
   LED behind a resistor) will not resolve, so assert against the board pin instead.
+- **One shared circuit, per-use-case buttons.** All scenarios use the same classic-ESP32 diagram:
+  `btn1` on GPIO0 drives UC-1 (LED toggle), `btn2` on GPIO4 drives UC-5 (Wi-Fi + HTTP), and
+  `led1`/`r1` sit on GPIO2. A scenario addresses the button it needs by `part-id` (`btn1` vs
+  `btn2`); do not let two use cases share one pin (their independent poll ticks then fight, and a
+  second Wi-Fi init aborts the chip).
 - **Scenario:** `tests/velxio/scenarios/<name>.yaml`. Each step is a mapping with exactly one key:
 
   | Step | Behaviour |
@@ -302,8 +321,12 @@ that a hard build failure by design.
 | `make: command not found` inside the container | the Velxio image ships ESP-IDF but no host C toolchain | compose startup installs `gcc make libc6-dev` |
 | `merge-bin` `FileNotFound: build/firmware.merged.bin` | `merge-bin` runs *inside* `build/`, so a relative `-o` becomes `build/build/...` | pass an absolute `-o "$PWD/build/firmware.merged.bin"` |
 | Firmware does not boot / flash-size error | QEMU machine is fixed at 4 MB | `sdkconfig.defaults` sets 4 MB and build.sh passes `--fill-flash-size 4MB` |
-| Second button press has no effect | 2-tick debounce needs hold/release margin | scenario delays ≥400 ms |
 | `expect-pin` never matches | output-pin `gpio_change` not emitted by the OSS bridge | assert via firmware `printf` + `wait-serial` |
+| Firmware crashes in `esp_phy_enable` (`phy_module_has_clock_bits`) | built with IDF 5.x; the fork's radio only models the modem clocks IDF 4.4 needs | build with the `/opt/esp-idf-v4.4` tree (see §5) |
+| Second Wi-Fi trigger reboots, `assert: esp_netif_create_default_wifi_sta` | `esp_netif_create_default_wifi_sta` re-run on a later press returns NULL | make Wi-Fi init one-shot; only `esp_wifi_connect` again |
+| `Found 0`/fewer after switching target | stale `sdkconfig`/`build` from the previous target, or a poisoned ccache | `rm -rf build sdkconfig` and `ccache -C` |
+| UC-5 fetch gets no network / proxy stub | `dev-http-server` not running, or parent `:8000` down | `./scripts/dev-http-server.sh start`; set `VELXIO_PROXY_UPSTREAM` |
+| VS Code keeps forwarding container `:8000` (collides with your host server) | VS Code auto-forwards the port and retries (`ECONNREFUSED`) | add `"8000": {"onAutoForward":"ignore"}` to `remote.portsAttributes` (done); remove the Ports-panel entry and reload |
 | Listener returns HTTP 503 | a build/test is already running | wait; requests are serialised |
 | Listener returns 404 for a route that exists in the file | host is still running the old listener process | restart `.devcontainer/docker-build-listener.py` on the host |
 

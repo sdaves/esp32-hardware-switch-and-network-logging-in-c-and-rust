@@ -4,7 +4,10 @@
     "vscode": {
       "settings": {
         "remote.portsAttributes": {
-          "8018": {
+          "8000": {
+            "onAutoForward": "ignore"
+          },
+          "3080": {
             "onAutoForward": "ignore"
           }
         }

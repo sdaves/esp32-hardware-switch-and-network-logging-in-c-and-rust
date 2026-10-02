@@ -5,6 +5,12 @@ Audience: firmware maintainers
 Scope: run the real ESP32-S3 firmware in a self-hosted OSS Velxio instance and drive it
 with automated per-use-case tests, without hardware.
 
+> **Superseded in part (2026-10).** The target is now the **classic ESP32**, not the S3:
+> the QEMU fork only models a Wi-Fi radio on `esp32-picsimlab`, and only under ESP-IDF 4.4.
+> The harness, circuit, `.vlx`, and build target therefore use `esp32`, UC-5 does a real
+> Wi-Fi + HTTP fetch, and `scripts/dev-http-server.py` reverse-proxies it. See `AGENTS.md` §5
+> for the current setup; the protocol/step vocabulary below is still accurate.
+
 This runbook is a set of instructions. It is not executed by tooling.
 
 ---
