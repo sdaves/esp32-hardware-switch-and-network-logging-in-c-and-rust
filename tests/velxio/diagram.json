@@ -4,13 +4,16 @@
     { "type": "board-esp32-devkit-c-v4", "id": "esp",  "top": 0,   "left": 0,   "attrs": {} },
     { "type": "wokwi-pushbutton",         "id": "btn1", "top": -90, "left": 200, "attrs": { "color": "green", "label": "BOOT" } },
     { "type": "wokwi-resistor",           "id": "r1",   "top": 0,   "left": 240, "attrs": { "value": "220" } },
-    { "type": "wokwi-led",                "id": "led1", "top": -70, "left": 320, "attrs": { "color": "red", "label": "LED" } }
+    { "type": "wokwi-led",                "id": "led1", "top": -70, "left": 320, "attrs": { "color": "red", "label": "LED" } },
+    { "type": "wokwi-pushbutton",         "id": "btn2", "top": 40,  "left": 200, "attrs": { "color": "blue", "label": "NET" } }
   ],
   "connections": [
     ["esp:0",     "btn1:1",   "green", []],
     ["btn1:2",    "esp:GND.1","black", []],
     ["esp:2",     "r1:1",     "green", []],
     ["r1:2",      "led1:A",   "green", []],
-    ["led1:C",    "esp:GND.2","black", []]
+    ["led1:C",    "esp:GND.2","black", []],
+    ["esp:4",     "btn2:1",   "blue",  []],
+    ["btn2:2",    "esp:GND.3","black", []]
   ]
 }

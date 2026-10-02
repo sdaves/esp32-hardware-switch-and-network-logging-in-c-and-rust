@@ -1,10 +1,11 @@
 # ESP32-S3 Simulated — Zero-Allocation Elm Architecture
 
-A production firmware project for the **ESP32-S3** written in **pure C11** using
+A production firmware project for **ESP32** written in **pure C11** using
 The Elm Architecture (TEA). It is built with ESP-IDF, runs on real silicon, and
-is exercised end-to-end on emulated ESP32-S3 silicon by a self-hosted
+is exercised end-to-end on emulated ESP32 silicon by a self-hosted
 [Velxio](https://github.com/davidmonterocrespo24/velxio) stack — no hardware
-required.
+required. The emulated target is the **classic ESP32** because it is the only
+board whose QEMU machine models a Wi-Fi radio (UC-5 does a real network fetch).
 
 The whole system is driven by one top-level **`Makefile`**; this README is the
 human guide to those commands.
@@ -163,7 +164,7 @@ make native-test
 # test_event_bus: PASS
 ```
 
-**Emulator tests** — the real firmware on emulated ESP32-S3, driven over a
+**Emulator tests** — the real firmware on emulated ESP32 silicon, driven over a
 WebSocket session. Each use case gets a `scenarios/*.yaml` file (sharing the
 `diagram.json` circuit):
 
@@ -180,6 +181,19 @@ Because the OSS emulator bridge does not reliably emit output-pin `gpio_change`
 events, UC-1 asserts the LED through a firmware `printf`
 (`# LED ON (gpio 2)` / `# LED OFF (gpio 2)`) and `wait-serial`, rather than
 reading the pin. Input injection (`esp32_gpio_in`) does work.
+
+UC-5 does a **real Wi-Fi + HTTP fetch**: pressing its NET button (GPIO4) joins
+the emulator's `Espressif` AP, gets an IP, and `GET`s
+`http://192.168.4.2:8000/editor` (the slirp gateway, i.e. this container) via
+`scripts/dev-http-server.py`. The scenario asserts `# WIFI CONNECTED`,
+`-> status 200`, the response body, and `# NETWORK SYNCED`.
+
+> **Board and toolchain note.** The QEMU fork only models a Wi-Fi radio on the
+> **classic ESP32**, and only under **ESP-IDF 4.4** (IDF 5.x's `esp_phy_enable`
+> asserts on a register the fork lacks). The project therefore targets `esp32`
+> and `scripts/build.sh` uses an ESP-IDF v4.4.7 tree at `/opt/esp-idf-v4.4` when
+> present. Two buttons are wired: BOOT (GPIO0) drives UC-1, NET (GPIO4) drives
+> UC-5.
 
 ---
 
@@ -207,17 +221,20 @@ In a browser on the host, go to **http://localhost:3080/editor**.
 ### 3. Import the circuit
 
 `tests/velxio/esp32simulated.vlx` declares the board and wiring that the CLI
-scenarios use — an ESP32-S3 with the BOOT button on GPIO0 and the LED on GPIO2:
+scenarios use — a classic **ESP32** with two buttons and an LED:
 
 1. In the editor, open **Import project**.
 2. Choose `tests/velxio/esp32simulated.vlx`.
    (The editor imports a `.vlx` project, not a folder.)
 
-The canvas should show the ESP32-S3 board, a BOOT pushbutton on **GPIO0**, a
-220 Ω resistor, and a red LED on **GPIO2**, wired as in `tests/velxio/diagram.json`:
-`GPIO0 → button → GND`, and `GPIO2 → 220 Ω → LED anode (A)`, `LED cathode (C) → GND`.
-The button is active-low (the board's external pull-up holds GPIO0 high; pressing
-it pulls the pin low), matching the firmware's `INPUT_PULLUP` read.
+The canvas should show the ESP32 board with:
+- **BOOT** pushbutton on **GPIO0** → drives UC-1 (LED toggle)
+- **NET** pushbutton on **GPIO4** → drives UC-5 (Wi-Fi + HTTP)
+- `GPIO2 → 220 Ω → LED anode (A)`, `LED cathode (C) → GND`
+
+Both buttons are active-low (external pull-up high; pressing pulls the pin low),
+matching the firmware's `INPUT_PULLUP` reads. The classic ESP32 is required
+because it is the only board whose emulated QEMU machine has a Wi-Fi radio.
 
 ### 4. Upload the firmware binary
 
@@ -230,16 +247,24 @@ it pulls the pin low), matching the firmware's `INPUT_PULLUP` read.
 
 - Open the **Serial Monitor** at **115200** baud. The boot log should read
   `Platform Engine Initializing: Found 5 Autonomous Modules.`
-- Press **BOOT** (or the on-screen `btn1`); each press toggles the LED and the
-  monitor prints the firmware markers:
-  - UC-1: `# LED ON (gpio 2)` / `# LED OFF (gpio 2)`
-  - UC-5: `# UART SENT` then `# NETWORK SYNCED`
+- Press **BOOT** (on-screen `btn1`): toggles the LED — `# LED ON (gpio 2)` /
+  `# LED OFF (gpio 2)`.
+- Press **NET** (on-screen `btn2`): UC-5 joins the emulated `Espressif` AP and
+  fetches over the network. The monitor prints `# UART SENT`,
+  `# WIFI CONNECTED (Espressif)`, `# HTTP GET … -> status 200`, the response
+  body, then `# NETWORK SYNCED`.
 
 ### Notes
 
+- UC-5's fetch targets `http://192.168.4.2:8000/editor`, the slirp gateway (the
+  container). Make sure the endpoint is up:
+  `./scripts/dev-http-server.sh start` (the headless `make test` starts it for you).
 - The `.vlx` is a **circuit-only** project: it contains a placeholder `main.c`
   and is never compiled unless you press **Compile** without uploading a binary.
   Always upload `build/firmware.merged.bin` to run the real firmware.
+- The firmware must be built with the ESP-IDF v4.4.7 tree (`scripts/build.sh`
+  does this automatically when `/opt/esp-idf-v4.4` is present); an IDF 5.x build
+  crashes the emulated ESP32 radio in `esp_phy_enable`.
 - To iterate, `make build` again and re-upload the new `.bin`; no editor project
   changes are needed.
 - The `.vlx` mirrors `tests/velxio/diagram.json`. If you change the circuit,
@@ -251,9 +276,10 @@ it pulls the pin low), matching the firmware's `INPUT_PULLUP` read.
 
 - **UC-1 (`toggle-physical-led`)** is implemented end-to-end: BOOT button on
   GPIO0 toggles the LED on GPIO2, validated natively and in the emulator.
-- **UC-5 (`fetch-and-uart`)** is implemented end-to-end: a DB-query result sends
-  over UART and then syncs the network, triggered by the shared BOOT button and
-  validated natively and in the emulator (`make scenario NAME=fetch_and_uart`).
+- **UC-5 (`fetch-and-uart`)** is implemented end-to-end: the NET button (GPIO4)
+  triggers the chain, which sends over UART, joins the emulated Wi-Fi AP, does a
+  real HTTP GET, and syncs the network. Validated natively and in the emulator
+  (`make scenario NAME=fetch_and_uart`).
 - The remaining use-case plugins (`read-analog-sensor`, `fetch-and-save`,
   `read-and-insert`) exist and compile but their `commands.c` implementations
   are stubs.

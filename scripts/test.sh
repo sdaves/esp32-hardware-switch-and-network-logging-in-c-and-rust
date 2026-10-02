@@ -12,6 +12,11 @@ make -C test
 
 curl -fsS "$VELXIO_HTTP/health" >/dev/null
 
+# The UC-5 firmware does a real Wi-Fi + HTTP GET to the slirp gateway
+# (192.168.4.2), which is the container. Make sure a server is listening on
+# :8000 so the fetch has something to reach.
+./scripts/dev-http-server.sh start
+
 # Run every scenario in tests/velxio/scenarios/, in filename order, so adding a
 # use case's YAML automatically extends `make test`. Any failing scenario aborts
 # the run (set -e + explicit exit).

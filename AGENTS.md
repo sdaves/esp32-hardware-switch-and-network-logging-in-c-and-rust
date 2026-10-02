@@ -104,11 +104,18 @@ Desktop build/run harness. Compiles each test target with strict C11 warnings (`
 
 ---
 
-## 🖥️ 5. Velxio Simulator Testing (emulated ESP32-S3)
+## 🖥️ 5. Velxio Simulator Testing (emulated ESP32)
 
-The real production firmware is built with ESP-IDF and run on emulated ESP32-S3 silicon by a
+The real production firmware is built with ESP-IDF and run on emulated ESP32 silicon by a
 self-hosted OSS Velxio stack, then driven by Python WebSocket scenarios. See
 `docs/runbooks/add_testing_simulator.md` for the full protocol and rationale.
+
+**Target board:** the emulator's QEMU fork only models a Wi-Fi radio on the **classic ESP32**
+(`esp32-picsimlab`), not the ESP32-S3 (`hw/xtensa/esp32s3.c` never attaches a NIC). UC-5 does a
+real Wi-Fi + HTTP fetch, so the build target, the circuit, the `.vlx`, and the harness all use
+`esp32`. Additionally, the fork's radio only initialises under **ESP-IDF 4.4** — IDF 5.x's
+`esp_phy_enable` asserts on a modem-clock register the fork does not model. `scripts/build.sh`
+therefore prefers an ESP-IDF v4.4.7 tree at `/opt/esp-idf-v4.4` when present.
 
 ### `docker-compose.yaml`
 Runs the OSS Velxio image (`ghcr.io/davidmonterocrespo24/velxio:master`) with the repo mounted
@@ -118,14 +125,22 @@ before launching `/app/entrypoint.sh` **from `/app`** (the backend imports `app.
 only importable with that working directory). Ports: host `3080 → nginx :80`, host `8001 → uvicorn`.
 
 ### `scripts/build.sh` / `scripts/test.sh`
-`build.sh` sources ESP-IDF, sets target `esp32s3` once, builds, then merges a flash image with
-`idf.py merge-bin --fill-flash-size 4MB -o "$PWD/build/firmware.merged.bin"`. `test.sh` runs
-`make -C test`, then `build.sh`, then runs **every** scenario in `tests/velxio/scenarios/*.yaml`
-in filename order (a failing scenario aborts the run). This is the definition of `make test`:
-native tests + firmware build + the full emulator scenario suite. Adding a use case's YAML under
+`build.sh` prefers an **ESP-IDF v4.4.7** tree at `/opt/esp-idf-v4.4` (clearing the container's
+ambient v5 `IDF_PATH` first), sets target `esp32` once, builds, then merges a 4 MB flash image
+with the bundled `esptool.py merge_bin --fill-flash-size 4MB`. `test.sh` runs `make -C test`,
+then `build.sh`, then starts `scripts/dev-http-server.sh` (so UC-5's Wi-Fi GET has an endpoint on
+the container's `:8000`), then runs **every** scenario in `tests/velxio/scenarios/*.yaml` in
+filename order (a failing scenario aborts the run). This is the definition of `make test`: native
+tests + firmware build + the full emulator scenario suite. Adding a use case's YAML under
 `scenarios/` automatically extends `make test` — no edit to `test.sh`. Both scripts default to
 the in-container addresses (`VELXIO_HTTP=http://localhost`, `VELXIO_WS=ws://localhost`); override
 them to target the host-published ports.
+
+### `scripts/dev-http-server.{sh,py}`
+A tiny HTTP endpoint on the container's `:8000`. The QEMU guest reaches the container at the
+slirp gateway `192.168.4.2`, so UC-5's firmware does `GET http://192.168.4.2:8000/editor` and
+receives a real `200`. `start|stop|status` via the shell wrapper; `test.sh` starts it
+automatically.
 
 ### `tests/velxio/`
 `diagram.json` (Wokwi circuit), `scenarios/*.yaml` (per-use-case steps, all driven by `test.sh`),
@@ -295,7 +310,7 @@ The harness speaks directly to the OSS simulation route (no `velxio-cli`; see th
 
 - URL: `ws://<host>/api/simulation/ws/<client_id>` — always use a **unique** `client_id` so a
   browser tab cannot collide with a test.
-- to server: `start_esp32 {board:"esp32-s3", firmware_b64, wifi_enabled:false}`,
+- to server: `start_esp32 {board:"esp32", firmware_b64, wifi_enabled:true}`,
   `esp32_gpio_in {pin, state}`, `esp32_adc_set {channel, millivolts}`,
   `esp32_serial_input {bytes:[...], uart}`, `stop_esp32`.
 - from server: `serial_output {data, uart}`, `gpio_change {pin, state}`, `gpio_pull {pin, pull}`,

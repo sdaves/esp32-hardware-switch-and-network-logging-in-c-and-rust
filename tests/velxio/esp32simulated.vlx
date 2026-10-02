@@ -24,30 +24,41 @@
   },
   "components": [
     {
-      "id": "btn_1790923507000_btn",
+      "id": "btn_led",
       "metadataId": "pushbutton",
       "x": 69.80373823491543,
-      "y": -41.43650183039254,
+      "y": -71.43650183039254,
       "properties": {
-        "label": "BOOT",
+        "label": "BOOT/LED",
         "color": "green",
         "pressed": false
       }
     },
     {
-      "id": "r_1790923507001_res",
+      "id": "btn_net",
+      "metadataId": "pushbutton",
+      "x": 69.80373823491543,
+      "y": -1.43650183039254,
+      "properties": {
+        "label": "NET",
+        "color": "blue",
+        "pressed": false
+      }
+    },
+    {
+      "id": "r_led",
       "metadataId": "resistor",
       "x": 69.80373823491543,
-      "y": 20.0,
+      "y": 60.0,
       "properties": {
         "value": "220"
       }
     },
     {
-      "id": "led_1790923507171_w1hbt87nj",
+      "id": "led_1",
       "metadataId": "led",
       "x": 69.80373823491543,
-      "y": 81.56349816960746,
+      "y": 121.56349816960746,
       "properties": {
         "value": false,
         "brightness": 1,
@@ -60,12 +71,12 @@
   ],
   "wires": [
     {
-      "id": "wire-btn-esp",
+      "id": "wire-ledbtn-esp",
       "start": {
-        "componentId": "btn_1790923507000_btn",
+        "componentId": "btn_led",
         "pinName": "1.l",
         "x": 50.80373823491543,
-        "y": -51.43650183039254
+        "y": -81.43650183039254
       },
       "end": {
         "componentId": "esp32",
@@ -77,16 +88,50 @@
       "autoRouted": true
     },
     {
-      "id": "wire-btn-gnd",
+      "id": "wire-ledbtn-gnd",
       "start": {
-        "componentId": "btn_1790923507000_btn",
+        "componentId": "btn_led",
         "pinName": "2.l",
         "x": 50.80373823491543,
-        "y": -21.43650183039254
+        "y": -51.43650183039254
       },
       "end": {
         "componentId": "esp32",
-        "pinName": "GND",
+        "pinName": "GND.1",
+        "x": 27.78097693136982,
+        "y": 82.39977799574677
+      },
+      "color": "#000000",
+      "autoRouted": true
+    },
+    {
+      "id": "wire-netbtn-esp",
+      "start": {
+        "componentId": "btn_net",
+        "pinName": "1.l",
+        "x": 50.80373823491543,
+        "y": -11.43650183039254
+      },
+      "end": {
+        "componentId": "esp32",
+        "pinName": "4",
+        "x": 27.78097693136982,
+        "y": 100.39977799574677
+      },
+      "color": "#3b82f6",
+      "autoRouted": true
+    },
+    {
+      "id": "wire-netbtn-gnd",
+      "start": {
+        "componentId": "btn_net",
+        "pinName": "2.l",
+        "x": 50.80373823491543,
+        "y": 18.56349816960746
+      },
+      "end": {
+        "componentId": "esp32",
+        "pinName": "GND.2",
         "x": 27.78097693136982,
         "y": 82.39977799574677
       },
@@ -102,10 +147,10 @@
         "y": 133.39977799574677
       },
       "end": {
-        "componentId": "r_1790923507001_res",
+        "componentId": "r_led",
         "pinName": "1",
         "x": 90.80373823491543,
-        "y": 0.0
+        "y": 40.0
       },
       "color": "#22c55e",
       "autoRouted": true
@@ -113,16 +158,16 @@
     {
       "id": "wire-r-led",
       "start": {
-        "componentId": "r_1790923507001_res",
+        "componentId": "r_led",
         "pinName": "2",
         "x": 90.80373823491543,
-        "y": 40.0
+        "y": 80.0
       },
       "end": {
-        "componentId": "led_1790923507171_w1hbt87nj",
+        "componentId": "led_1",
         "pinName": "A",
         "x": 100.80373823491543,
-        "y": 81.56349816960746
+        "y": 121.56349816960746
       },
       "color": "#22c55e",
       "autoRouted": true
@@ -130,14 +175,14 @@
     {
       "id": "wire-led-gnd",
       "start": {
-        "componentId": "led_1790923507171_w1hbt87nj",
+        "componentId": "led_1",
         "pinName": "C",
         "x": 90.80373823491543,
-        "y": 91.56349816960746
+        "y": 131.56349816960746
       },
       "end": {
         "componentId": "esp32",
-        "pinName": "GND",
+        "pinName": "GND.1",
         "x": 27.78097693136982,
         "y": 82.39977799574677
       },

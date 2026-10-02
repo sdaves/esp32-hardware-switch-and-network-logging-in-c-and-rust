@@ -16,7 +16,7 @@
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 
-#define FETCH_AND_UART_BUTTON_GPIO GPIO_NUM_0
+#define FETCH_AND_UART_BUTTON_GPIO GPIO_NUM_4
 
 /* The Velxio QEMU ESP32 machine broadcasts a hardcoded open AP, and only the
  * slirp network (192.168.4.0/24) is reachable from the guest. Hardcode both so
@@ -59,8 +59,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
-static bool wifi_connect_sta(void)
+/* Bring up the Wi-Fi stack exactly once. Re-running esp_netif_init /
+ * esp_netif_create_default_wifi_sta on a later press returns NULL for the
+ * already-created netif and asserts inside IDF, resetting the chip. */
+static bool wifi_init_once(void)
 {
+    static bool s_wifi_ready = false;
+    if (s_wifi_ready) {
+        return true;
+    }
+
     s_wifi_event_group = xEventGroupCreate();
 
     esp_err_t err = nvs_flash_init();
@@ -94,6 +102,12 @@ static bool wifi_connect_sta(void)
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
 
+    s_wifi_ready = true;
+    return true;
+}
+
+static bool wifi_wait_connected(void)
+{
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                                            pdFALSE, pdFALSE,
@@ -115,7 +129,8 @@ static void http_get_sample(void)
 
     esp_err_t err = esp_http_client_open(client, 0);
     if (err == ESP_OK) {
-        int status = esp_http_client_fetch_headers(client);
+        esp_http_client_fetch_headers(client);
+        int status = esp_http_client_get_status_code(client);
         int total = esp_http_client_get_content_length(client);
         char buf[64];
         int read = esp_http_client_read(client, buf, sizeof(buf) - 1);
@@ -162,7 +177,7 @@ void execute_fetch_and_uart_hardware(const Cmd *command)
         break;
     case CMD_SYNC_NETWORK:
 #ifdef ESP_PLATFORM
-        if (wifi_connect_sta()) {
+        if (wifi_init_once() && wifi_wait_connected()) {
             printf("# WIFI CONNECTED (%s)\n", FETCH_AND_UART_WIFI_SSID);
             http_get_sample();
         } else {
