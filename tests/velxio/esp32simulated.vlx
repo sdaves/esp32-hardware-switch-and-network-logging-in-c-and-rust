@@ -5,17 +5,17 @@
   "name": "esp32simulated",
   "boards": [
     {
-      "id": "esp32-s3",
-      "boardKind": "esp32-s3",
+      "id": "esp32",
+      "boardKind": "esp32",
       "x": -93.21902306863018,
       "y": 44.399777995746774,
-      "activeFileGroupId": "group-esp32-s3",
+      "activeFileGroupId": "group-esp32",
       "languageMode": "espidf",
       "serialBaudRate": 115200
     }
   ],
   "fileGroups": {
-    "group-esp32-s3": [
+    "group-esp32": [
       {
         "name": "main/main.c",
         "content": "/* Firmware is uploaded as a prebuilt .bin (build/firmware.merged.bin).\n * This placeholder exists only so the project loads; it is not compiled\n * when a binary is uploaded directly. */\n"
@@ -68,7 +68,7 @@
         "y": -51.43650183039254
       },
       "end": {
-        "componentId": "esp32-s3",
+        "componentId": "esp32",
         "pinName": "0",
         "x": 27.78097693136982,
         "y": 60.39977799574677
@@ -85,8 +85,8 @@
         "y": -21.43650183039254
       },
       "end": {
-        "componentId": "esp32-s3",
-        "pinName": "GND.1",
+        "componentId": "esp32",
+        "pinName": "GND",
         "x": 27.78097693136982,
         "y": 82.39977799574677
       },
@@ -96,7 +96,7 @@
     {
       "id": "wire-esp-r",
       "start": {
-        "componentId": "esp32-s3",
+        "componentId": "esp32",
         "pinName": "2",
         "x": 27.78097693136982,
         "y": 133.39977799574677
@@ -136,8 +136,8 @@
         "y": 91.56349816960746
       },
       "end": {
-        "componentId": "esp32-s3",
-        "pinName": "GND.2",
+        "componentId": "esp32",
+        "pinName": "GND",
         "x": 27.78097693136982,
         "y": 82.39977799574677
       },
@@ -145,5 +145,5 @@
       "autoRouted": true
     }
   ],
-  "activeBoardId": "esp32-s3"
+  "activeBoardId": "esp32"
 }

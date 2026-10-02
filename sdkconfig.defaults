@@ -1,2 +1,8 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# UC-5 does a real Wi-Fi + HTTP fetch in the emulator, so the radio and the
+# default NVS partition (Wi-Fi calibration/credentials) must be present.
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=n

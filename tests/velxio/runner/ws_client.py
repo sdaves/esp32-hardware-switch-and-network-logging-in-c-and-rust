@@ -41,9 +41,9 @@ class SimSession:
         await self._send(
             "start_esp32",
             {
-                "board": "esp32-s3",
+                "board": "esp32",
                 "firmware_b64": encoded,
-                "wifi_enabled": False,
+                "wifi_enabled": True,
             },
         )
 

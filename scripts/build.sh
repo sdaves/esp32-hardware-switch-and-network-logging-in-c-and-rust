@@ -10,8 +10,8 @@ elif [ -n "${IDF_PATH:-}" ] && [ -f "${IDF_PATH}/export.sh" ]; then
   . "${IDF_PATH}/export.sh"
 fi
 
-if [ ! -f sdkconfig ] || ! grep -q '^CONFIG_IDF_TARGET="esp32s3"' sdkconfig; then
-  idf.py set-target esp32s3
+if [ ! -f sdkconfig ] || ! grep -q '^CONFIG_IDF_TARGET="esp32"' sdkconfig; then
+  idf.py set-target esp32
 fi
 idf.py build
 
