@@ -1,22 +1,27 @@
-use core::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::sys;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
-use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 
 use tea_core::use_cases::fetch_and_uart::{self, Cmd, Msg};
 use tea_platform::{PlatformEvent, PlatformModule, SystemEventId};
 
 // Mirrors main/use_cases/fetch-and-uart/commands.c: the NET button on GPIO4.
 const BUTTON_GPIO: sys::gpio_num_t = 4;
+const SSID: &str = "Espressif";
+const URL_HOST: &str = "192.168.4.2:8000";
+const URL_PATH: &str = "/";
 
 pub struct FetchAndUart {
     model: fetch_and_uart::Model,
     last_level: i32,
     armed: bool,
+    // Wi-Fi is initialised once and kept alive for the life of the module. The
+    // C code guards this with `static bool s_wifi_ready`: re-running
+    // `esp_netif_create_default_wifi_sta` (or dropping/re-taking the ESP-IDF
+    // singletons) fails with ESP_ERR_INVALID_STATE and resets the chip.
+    wifi: Option<BlockingWifi<EspWifi<'static>>>,
 }
 
 impl FetchAndUart {
@@ -25,14 +30,51 @@ impl FetchAndUart {
             model: fetch_and_uart::init(),
             last_level: 1,
             armed: true,
+            wifi: None,
         }
+    }
+
+    /// First call brings up Wi-Fi and holds the handle; later calls reuse it.
+    fn wifi_once(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.wifi.is_some() {
+            return Ok(());
+        }
+
+        // The modem peripheral must outlive the stored `EspWifi<'static>`.
+        // Leak the owned `Peripherals` once, mirroring the C file-static
+        // singletons (`esp_netif_create_default_wifi_sta` is a one-shot).
+        let peripherals: &'static mut esp_idf_svc::hal::peripherals::Peripherals =
+            Box::leak(Box::new(esp_idf_svc::hal::peripherals::Peripherals::take()?));
+        let sys_loop = esp_idf_svc::eventloop::EspSystemEventLoop::take()?;
+        let nvs = esp_idf_svc::nvs::EspDefaultNvsPartition::take()?;
+
+        let mut wifi = BlockingWifi::wrap(
+            EspWifi::new(&mut peripherals.modem, sys_loop.clone(), Some(nvs))?,
+            sys_loop,
+        )?;
+
+        wifi.set_configuration(&Configuration::Client(ClientConfiguration {
+            ssid: SSID.try_into().unwrap(),
+            bssid: None,
+            auth_method: AuthMethod::None,
+            password: "".try_into().unwrap(),
+            channel: None,
+        }))?;
+
+        wifi.start()?;
+        wifi.connect()?;
+        wifi.wait_netif_up()?;
+        log::info!("# WIFI CONNECTED ({SSID})");
+
+        self.wifi = Some(wifi);
+        Ok(())
     }
 
     fn button_pressed(&self) -> bool {
         unsafe { sys::gpio_get_level(BUTTON_GPIO) == 0 }
     }
 
-    fn execute(&self, command: &Cmd) -> Option<PlatformEvent> {
+    fn execute(&mut self, command: &Cmd) -> Option<PlatformEvent> {
         match command {
             Cmd::None => None,
             Cmd::SendUart => {
@@ -43,11 +85,11 @@ impl FetchAndUart {
                 Some(PlatformEvent::DbQueryResult(Msg::UartTxDone))
             }
             Cmd::SyncNetwork => {
-                // Real one-shot Wi-Fi bring-up + HTTP GET, mirroring the C
-                // `execute_fetch_and_uart_hardware` CMD_SYNC_NETWORK arm.
-                match wifi_and_fetch() {
-                    Ok(()) => {}
-                    Err(err) => log::error!("# WIFI SPIKE FAILED: {err:?}"),
+                // One-shot Wi-Fi bring-up, then an HTTP GET on every press.
+                if let Err(err) = self.wifi_once() {
+                    log::error!("# WIFI SPIKE FAILED: {err:?}");
+                } else if let Err(err) = http_get() {
+                    log::error!("# HTTP GET FAILED: {err:?}");
                 }
                 println!("# NETWORK SYNCED");
                 None
@@ -104,36 +146,8 @@ impl PlatformModule for FetchAndUart {
     }
 }
 
-// One-shot Wi-Fi bring-up (the C fix: never re-run `EspWifi::new` /
-// `esp_netif_create_default_wifi_sta` on a later trigger) then an HTTP GET.
-#[allow(dead_code)]
-fn wifi_and_fetch() -> Result<(), Box<dyn std::error::Error>> {
-    const SSID: &str = "Espressif";
-    const URL_HOST: &str = "192.168.4.2:8000";
-    const URL_PATH: &str = "/";
-
-    let peripherals = Peripherals::take()?;
-    let sys_loop = EspSystemEventLoop::take()?;
-    let nvs = EspDefaultNvsPartition::take()?;
-
-    let mut wifi = BlockingWifi::wrap(
-        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
-        sys_loop,
-    )?;
-
-    wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: SSID.try_into().unwrap(),
-        bssid: None,
-        auth_method: AuthMethod::None,
-        password: "".try_into().unwrap(),
-        channel: None,
-    }))?;
-
-    wifi.start()?;
-    wifi.connect()?;
-    wifi.wait_netif_up()?;
-    log::info!("# WIFI CONNECTED ({SSID})");
-
+// HTTP GET against the slirp gateway. Wi-Fi is already up (held by the module).
+fn http_get() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect(URL_HOST)?;
     write!(
         stream,
@@ -150,7 +164,6 @@ fn wifi_and_fetch() -> Result<(), Box<dyn std::error::Error>> {
     }
     let body: String = lines.collect::<Vec<_>>().join("\n");
     log::info!("# HTTP BODY {body}");
-    log::info!("# NETWORK SYNCED");
 
     Ok(())
 }
