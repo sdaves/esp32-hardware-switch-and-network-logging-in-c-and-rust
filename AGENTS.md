@@ -200,6 +200,10 @@ curl -sS --max-time 300 -G --data-urlencode 'cmd=cd /workspace && python3 -m tes
 
 ### 6.2 Add a use case (build-time coupling)
 
+For the full step-by-step, run `docs/runbooks/add_use_case.md` (it selects the next stub and
+covers logic, commands, registration, native tests, and the emulator scenario). The build-time
+summary is:
+
 Runtime registration is autonomous, but the ESP-IDF component must still compile the new
 translation units. Adding a plugin means:
 

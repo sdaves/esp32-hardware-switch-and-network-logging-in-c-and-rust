@@ -187,6 +187,11 @@ reading the pin. Input injection (`esp32_gpio_in`) does work.
 
 ## Extending
 
+Run **`docs/runbooks/add_use_case.md`** to take one use-case plugin from stub to
+end-to-end working — it selects the next stub, then walks logic, commands,
+registration, native tests, and the emulator scenario. Re-runnable once per use
+case.
+
 The operational recipes live in **`AGENTS.md`**:
 
 - **§6.2** — add a use case (the two required `main/CMakeLists.txt` edits, and
