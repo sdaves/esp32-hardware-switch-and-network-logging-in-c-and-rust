@@ -1,14 +1,23 @@
-# Runbook: Port the platform to Rust (Embassy + iced)
+# Runbook: Port the platform to Rust (esp-idf-svc + iced)
 
-Status: planned
+Status: in progress
 Audience: firmware maintainers and coding agents
 Scope: stand up a self-contained `rust/` workspace that reimplements the C platform in Rust —
-an Embassy/`esp-hal` firmware for the classic ESP32, a native host simulator, and an iced
-browser dashboard — without editing the C project (one compose-volume exception, §8).
+a **standard (std) `esp-idf-svc` firmware** for the classic ESP32, a native host simulator, and
+an iced browser dashboard — without editing the C project (one compose-volume exception, §8).
 
 This runbook is a set of instructions. It is **not executed by tooling**. It is phased; each
 phase is a checkpoint and must be run to completion before the next. **Do not port a use case
 before the Phase 0 gate passes.**
+
+> **Stack change (why std, not Embassy).** The original plan targeted bare-metal `no_std`
+> Embassy + `esp-hal`. It was replaced with **`esp-idf-svc` (std)** because Velxio's emulator
+> only brings up the Wi-Fi radio under **ESP-IDF 4.4** (`esp_phy_enable` asserts on the modem
+> registers IDF 5.x touches). `esp-idf-svc` calls the *same* C `esp_wifi_*` / `esp_netif` APIs
+> the working C firmware drives, so building Rust against the repo's existing
+> `/opt/esp-idf-v4.4` tree gives Rust Wi-Fi parity in the emulator. The price is leaving the
+> pure async Embassy environment and pinning older crates (details below). iced is unchanged:
+> it is a network client, not firmware.
 
 ---
 
@@ -25,27 +34,36 @@ before the Phase 0 gate passes.**
 
 ---
 
-## 1. Stack decision (why Embassy, why iced is only a client)
+## 1. Stack decision (why esp-idf-svc, why iced is only a client)
 
-- **Embassy is correct.** `esp-hal` 1.2.x supports the classic ESP32 as target
-  `xtensa-esp32-none-elf`; Embassy is the async runtime integrated into it (`esp-rtos` +
-  `embassy-executor`). Wi-Fi and TCP come from `esp-radio` + `embassy-net`. This is the
-  most-supported Rust embedded backend.
+- **`esp-idf-svc` is correct here.** It is `std` Rust and re-exports `esp-idf-hal` and
+  `esp-idf-sys` (`esp_idf_svc::hal`, `esp_idf_svc::sys`). Every Wi-Fi/HTTP call bottoms out in
+  the exact same C ESP-IDF libraries the existing firmware uses. Because the emulator's QEMU
+  fork models the IDF 4.4 radio (proven by the C UC-5 scenario), building Rust against the
+  **same IDF 4.4.7 tree** is what makes UC-5 run in the emulator from Rust.
+- **Version pin is load-bearing.** `esp-idf-svc` 0.49.0 (2024-06) deprecated ESP-IDF v4.4, and
+  current releases (0.5x) test only IDF 5.1+. To stay on IDF 4.4 we pin the last
+  pre-deprecation line: **`esp-idf-svc = "=0.48.1"`** (it pulls a matching `esp-idf-sys`,
+  ~0.36). This is the first thing the Phase 0 spike must prove.
+- **IDF 4.4 requires `--cfg espidf_time32`.** IDF 5.0+ uses 64-bit `time_t` (`espidf_time64`);
+  v4.4 uses 32-bit. Setting the wrong one breaks `libc`/`time_t`.
 - **iced cannot run on the MCU.** iced is a desktop/browser GUI (native + `wasm32`). It is the
-  **network client/dashboard** that connects to the ESP running Embassy; it is not firmware.
-  The firmware therefore needs a small HTTP/WebSocket server for iced to reach (Phase 3).
+  **network client/dashboard** that connects to the ESP; it is not firmware. The firmware needs
+  a small HTTP/WebSocket server for iced to reach (Phase 3) — `esp-idf-svc` ships
+  `EspHttpServer`, so this is now straightforward.
 - The C project's "Elm Architecture" maps cleanly to Rust enums and to iced's Elm model: keep
   one pure TEA core (`tea-core`) shared by every shell.
 
 ### Toolchain reality (measured)
 
 The Velxio container is **aarch64** and ships **no Rust** (`rustc`, `cargo`, `rustup`,
-`espflash` are all missing). Xtensa needs the Espressif rustc fork, the LLVM fork, and a GCC
-linker, installed by `espup`. This is provisioned at runtime, never in the image.
+`espflash` were all missing). Xtensa needs the Espressif rustc fork, the LLVM fork, a GCC
+linker (`espup`), and for std also `rust-src` + `ldproxy`. This is provisioned at runtime,
+never in the image.
 
 ```
 uname -m          -> aarch64
-rustc/cargo/...   -> MISSING
+rustc/cargo/...   -> MISSING (until provision)
 curl/gcc/make     -> present
 /workspace avail  -> ~49 GB
 ```
@@ -56,13 +74,16 @@ curl/gcc/make     -> present
 
 | Decision | Value |
 |---|---|
-| Firmware runtime | Embassy + `esp-hal` (`xtensa-esp32-none-elf`) |
+| Firmware runtime | `esp-idf-svc` **0.48.x** (std), target `xtensa-esp32-espidf` |
+| ESP-IDF | **v4.4.7** at `/opt/esp-idf-v4.4`, reused via `IDF_PATH` + `ESP_IDF_TOOLS_INSTALL_DIR=fromenv` |
+| Rust cfg | `--cfg espidf_time32` (never `espidf_time64` on v4.4) |
 | UI runtime | iced, native + `wasm32-unknown-unknown`, network client only |
 | First increment | pure core + event bus + **UC-1** |
-| Toolchain persistence | **Docker named volume** (accepted; requires the §8 compose edit) |
+| Module registration | `inventory`/`linkme`; fall back to a `register_modules!` macro list |
+| Toolchain persistence | **Docker named volume** (accepted; §8) |
 | C project edits | **none**, except the §8 compose volume/mount |
 | Emulator harness | reuse `tests/velxio/` runner + `diagram.json` **read-only** |
-| Fallback if Rust Wi-Fi won't run in Velxio | deferred shell, **not** a second full firmware (§12) |
+| Fallback if Wi-Fi won't run in Velxio | host tests + real-HW verification (**not** a second firmware, §12) |
 
 ---
 
@@ -71,26 +92,29 @@ curl/gcc/make     -> present
 ```
 rust/
 ├── Cargo.toml                 # workspace
-├── rust-toolchain.toml        # xtensa/esp toolchain pin
-├── .cargo/config.toml         # xtensa target, build-std, espflash runner
+├── rust-toolchain.toml        # esp toolchain pin
+├── .cargo/config.toml         # xtensa-esp32-espidf target, build-std, espidf_time32, ldproxy
+├── sdkconfig.defaults         # 4 MB flash, Wi-Fi on, custom partition table
+├── partitions.csv             # large factory app (std+IDF binary > 1 MB default)
 ├── Makefile                   # provision / build / test / wasm / sim / scenario
-├── .gitignore                 # target/, dist/, pkg/, .toolchain/
+├── .gitignore                 # target/, dist/, pkg/, .toolchain/, .embuild/
 ├── crates/
-│   ├── tea-core/              # no_std pure TEA (model/msg/cmd/update), all use cases
-│   ├── tea-platform/          # no_std event bus + module trait + registry
-│   ├── firmware/              # no_std embassy+esp-hal bin (plugins live here)
+│   ├── tea-core/              # pure TEA (model/msg/cmd/update), all use cases
+│   ├── tea-platform/          # event bus + module trait + registry
+│   ├── firmware/              # std esp-idf-svc bin (plugins live here)
 │   ├── host/                  # std CLI simulator + cargo integration tests
 │   └── ui/                    # iced app (native + wasm32) that connects to the device
 ├── scripts/
-│   ├── provision-rust.sh      # rustup + espup + espflash + wasm target, idempotent
+│   ├── provision-rust.sh      # rustup + espup + espflash + ldproxy + rust-src + wasm, idempotent
 │   ├── build.sh               # cargo +esp build -> dist/firmware.merged.bin (4 MB)
 │   ├── test.sh                # cargo test + velxio scenarios on the rust bin
 │   └── wasm.sh                # trunk build of ui
 └── dist/                      # merged bin artifacts (gitignored)
 ```
 
-`tea-core` and `tea-platform` compile both `no_std` (firmware) and with `std` (host/iced), so
-the same logic is unit-tested on the desktop and shipped to silicon.
+`tea-core` and `tea-platform` stay `#![no_std]`-compatible pure crates so the same logic is
+unit-tested on the desktop and shipped to silicon; the **firmware shell** is std. (They remain
+the zero-allocation functional core the C project enforces.)
 
 ---
 
@@ -100,10 +124,13 @@ Do this before porting anything. It de-risks the entire project in about a day.
 
 ### Phase 0 progress log
 
-- [x] **0.1 Provision** — done. The `esp-rust` volume (§8) is mounted, and
+- [x] **0.1a Base provision** — done. The `esp-rust` volume (§8) is mounted, and
   `rust/scripts/provision-rust.sh` installed: `stable-aarch64-unknown-linux-gnu` (with
   `wasm32-unknown-unknown`), the `esp` toolchain, `cargo install espup espflash`, and the
   Xtensa GCC/LLVM export at `/opt/esp-rust/export-esp.sh`.
+- [ ] **0.1b std additions** — pending. Re-run `provision-rust.sh`: it must also install
+  `cargo install ldproxy` (linker driver for `esp-idf-svc`) and
+  `rustup component add rust-src --toolchain esp` (for `-Zbuild-std`).
 - [x] **0.3 aarch64 gate** — pass. The Espressif fork publishes an aarch64 host build; the
   `esp` toolchain resolves and installs on this container (no cross-arch problem).
 - [ ] **0.2 Hello-world spike** — pending.
@@ -120,35 +147,45 @@ Measured toolchain facts (use these exact paths/names elsewhere in the runbook):
 | Firmware toolchain | `esp` (`cargo +esp …`) |
 | Host toolchain | `stable-aarch64-unknown-linux-gnu` (default) |
 | Xtensa env script | `/opt/esp-rust/export-esp.sh` (sets `PATH` + `LIBCLANG_PATH`) |
-| `espup`/`espflash` | `/opt/esp-rust/cargo/bin/{espup,espflash}` |
+| ESP-IDF tree (reused) | `/opt/esp-idf-v4.4` (`idf44` volume) |
+| `espup`/`espflash`/`ldproxy` | `/opt/esp-rust/cargo/bin/{espup,espflash,ldproxy}` |
 
 1. **Provision** (idempotent, mirrors `scripts/provision-idf44.sh`):
-   `rust/scripts/provision-rust.sh` installs rustup (aarch64), `cargo install espup espflash`,
-   `espup install --targets esp32`, and adds the `wasm32-unknown-unknown` target. All roots
-   point at the named volume (§8), so `down`/`up` does not re-download.
-2. **Hello-world spike.** In `/tmp`, `cargo install esp-generate` and
-   `esp-generate --chip esp32 hello`, build it, and produce a merged 4 MB image. Boot it in
-   Velxio through the **existing** runner:
+   `rust/scripts/provision-rust.sh` installs rustup (aarch64), `cargo install espup espflash
+   ldproxy`, `espup install --targets esp32`, `rustup component add rust-src --toolchain esp`,
+   and adds the `wasm32-unknown-unknown` target. All roots point at the named volume (§8), so
+   `down`/`up` does not re-download.
+2. **Hello-world spike.** Build a minimal std `esp-idf-svc` binary (the `esp-idf-template`
+   layout, or hand-written) that links the repo's IDF 4.4.7:
+   ```sh
+   # inside the container / via the host listener
+   . /opt/esp-idf-v4.4/export.sh          # xtensa gcc + IDF env
+   export ESP_IDF_TOOLS_INSTALL_DIR=fromenv IDF_PATH=/opt/esp-idf-v4.4
+   cargo +esp build --release --target xtensa-esp32-espidf -Zbuild-std=std,panic_abort
+   ```
+   Produce a merged 4 MB image (§9) and boot it in Velxio through the **existing** runner:
    ```sh
    python3 -m tests.velxio.runner.run_scenario \
      --server ws://localhost \
-     --firmware /tmp/hello/dist/firmware.merged.bin \
+     --firmware rust/dist/firmware.merged.bin \
      --diagram tests/velxio/diagram.json \
      --scenario tests/velxio/scenarios/uc1_button_toggle.yaml   # temporary; expect a marker
    ```
    Confirm the app boots and emits serial.
 3. **aarch64 gate.** ~~Confirm the Espressif Rust fork publishes an **aarch64** host build~~
    **PASSED** (see progress log): the `esp` toolchain installs on aarch64.
-4. **Wi-Fi spike.** Build a minimal `esp-radio` + `embassy-net` DHCP + HTTP-GET image and boot
-   it in Velxio. Record whether the fork's radio comes up at all.
+4. **Wi-Fi spike.** Build a minimal `esp-idf-svc` `BlockingWifi<EspWifi>` DHCP image plus an
+   HTTP GET to `http://192.168.4.2:8000/` and boot it in Velxio. Because it links the same C
+   IDF 4.4 radio as the passing C scenario, this is **expected to pass**. Record whether the
+   radio associates and the GET returns 200.
 
 ### Phase 0 gate outcome
 
 | Spike | Result | Consequence |
 |---|---|---|
 | hello-world boots in Velxio | pass | proceed; GPIO/UART parity is viable |
-| `esp-radio` Wi-Fi boots in Velxio | pass | **one** Embassy firmware serves all three surfaces |
-| `esp-radio` Wi-Fi fails in Velxio | expected | apply §12: Embassy stays real-HW-only; UC-1 for the emulator; UC-5 host-tested |
+| `esp-idf-svc` Wi-Fi boots in Velxio | pass (expected) | **one** std firmware serves all three surfaces |
+| `esp-idf-svc` Wi-Fi fails in Velxio | unexpected | apply §12: scope emulator parity to UC-1; UC-5 host-tested + real HW |
 
 Record the raw boot serial for both spikes in the Phase 0 notes so the decision is auditable.
 
@@ -196,24 +233,27 @@ Add the UC-2..UC-5 equivalents from `read-analog-sensor`, `fetch-and-save`, `rea
   `memcpy`/size-matched byte block. Typed matching removes the whole
   "declared message size must equal payload size" failure class.
 - `PlatformModule` trait mirroring the C vtable:
-  `name()`, `init_hardware()`, `poll_timer_tick()`, `wire_subscriptions(queue)`, `process(event)`.
-- Bus = `embassy-sync::channel::Channel<CriticalSectionRawMutex, PlatformEvent, 8>` with a
-  static subscription table. The same code runs on the host via the `std` critical-section
-  impl, so the bus is tested natively too.
-- **Autonomous registration:** primary `linkme::distributed_slice` as the `USE_CASE_REGISTER`
-  equivalent. If the esp-hal linker script drops the linkme sections, fall back to a
-  `register_modules!` macro that collects `&'static [&'static dyn PlatformModule]` (one macro
-  list; reliable, at the cost of the C project's linker-reflected autonomy).
+  `name()`, `init_hardware()`, `poll_timer_tick()`, `wire_subscriptions()`, `process(event)`.
+- Bus = a small static pub-sub table of `std::sync::mpsc` senders (the firmware is std). The
+  same logic is exercised by host tests, so the bus is tested natively too.
+- **Module registration:** try `linkme::distributed_slice` (stdlib `inventory` is the
+  alternative) as the `USE_CASE_REGISTER` equivalent. Because IDF links with `--gc-sections`,
+  an unreferenced registration can be discarded — if the banner reports fewer than five,
+  fall back to a `register_modules!` macro that collects
+  `&'static [&'static dyn PlatformModule]` (one macro list; reliable, at the cost of the C
+  project's linker-reflected autonomy).
 
-### 5.3 `firmware` (Embassy shell, mirrors `main.c`)
+### 5.3 `firmware` (std `esp-idf-svc` shell, mirrors `main.c`)
 
-- `#[esp_hal::main]` + `embassy-executor`; GPIO0 button, GPIO2 LED.
+- `fn main()` with `esp_idf_svc::sys::link_patches()`, `Peripherals::take()`, GPIO0 button
+  input and GPIO2 LED output via `esp_idf_svc::hal::gpio`.
 - Copy the edge-detect + release re-arm from `toggle-physical-led/setup.c` exactly (fire once on
-  high→low, latch until high), with a 100 ms tick.
+  high→low, latch until high), driven by a 100 ms poll (a `std::thread` loop or an
+  `esp-idf-svc` timer).
 - Print the same serial markers so existing expectations match:
   `Platform Engine Initializing: Found 5 Autonomous Modules.`,
   `# LED ON (gpio 2)`, `# LED OFF (gpio 2)`.
-- Use `esp-println`/`esp-backtrace`.
+- Use `esp_idf_svc::log::EspLogger` / `esp-idf-svc`'s panic handler.
 
 ### 5.4 `host` (std CLI simulator + tests)
 
@@ -227,7 +267,7 @@ Add the UC-2..UC-5 equivalents from `read-analog-sensor`, `fetch-and-save`, `rea
 ### 5.5 `rust/scripts/test.sh`
 
 1. `cargo test` (host crates);
-2. `cargo +esp build --release` → `dist/firmware.merged.bin` (see §9);
+2. `cargo +esp build --release ...` → `dist/firmware.merged.bin` (see §9);
 3. run the existing runner against the **Rust** bin:
    ```sh
    python3 -m tests.velxio.runner.run_scenario \
@@ -247,13 +287,15 @@ Add the UC-2..UC-5 equivalents from `read-analog-sensor`, `fetch-and-save`, `rea
 - **UC-5** is the real chain. Reproduce the C behavior and markers:
   button (GPIO4) → `# UART SENT` → Wi-Fi connect → HTTP GET
   `http://192.168.4.2:8000/` → `-> status 200` / `# HTTP BODY` → `# NETWORK SYNCED`.
-  Use `esp-radio` + `embassy-net` + an HTTP client (`reqwless` or similar).
+  Use `esp-idf-svc` `BlockingWifi`/`EspWifi` plus `esp_idf_svc::http::client` (or
+  `std::net::TcpStream`, as in the crate's `tcp` example). Keep Wi-Fi init **one-shot** — a
+  second `esp_netif_create_default_wifi_sta` returns NULL and reboots the chip (the C fix).
 - **UC-2/3/4** — port `tea-core` logic; keep command execution a no-op unless the C side is
   upgraded (in C they are empty). Their purpose is module-count parity and native tests.
-- **Emulator Wi-Fi** is the uncertain part. Apply the Phase 0 gate outcome:
+- **Emulator Wi-Fi** is the point of this stack choice. Apply the Phase 0 gate outcome:
   - pass → run `fetch_and_uart.yaml` against the Rust bin;
-  - fail → keep Embassy for real hardware, scope emulator parity to UC-1, and cover UC-5 with
-    host tests + real-hardware verification (§12).
+  - fail → scope emulator parity to UC-1 and cover UC-5 with host tests + real-hardware
+    verification (§12).
 
 ---
 
@@ -263,9 +305,9 @@ This phase is deferred until Phases 1–2 are green.
 
 - `crates/ui`: one iced app, native + `wasm32-unknown-unknown` via `trunk` (`rust/scripts/wasm.sh`),
   served as static assets.
-- Add a small server to the firmware (`embassy-net` + `picoserve` or an Embassy WebSocket
-  server). The iced app subscribes to events and publishes the same logical messages the
-  use cases consume.
+- Add a small server to the firmware using `esp_idf_svc::http::server::EspHttpServer` (it
+  supports HTTP and WebSocket handlers, as the crate's `http_ws_server` example shows). The
+  iced app subscribes to events and publishes the same logical messages the use cases consume.
 - Target real hardware (connect to the device's LAN IP). Browser → slirp-guest connectivity
   under Velxio is **unsolved**; do not block Phase 3 on it.
 
@@ -292,7 +334,8 @@ volumes:
 `rust/scripts/provision-rust.sh` must export `RUSTUP_HOME=/opt/esp-rust/rustup`,
 `CARGO_HOME=/opt/esp-rust/cargo`, and route espup's GCC/`~/.espressif` under `/opt/esp-rust`
 as well, so **all** toolchain state lands in the volume. `rust/Makefile` sets these env vars on
-every target.
+every target, and — for firmware targets — clears any ambient v5 `IDF_PATH` and sources
+`/opt/esp-idf-v4.4/export.sh`, exactly like `scripts/build.sh`.
 
 > If a hard "no root edits" rule is later required, the alternative is `RUSTUP_HOME`/`CARGO_HOME`
 > under `rust/.toolchain` (bind-mounted, gitignored). It persists on the host and needs no
@@ -313,24 +356,51 @@ curl -sS --max-time 2400 -G \
 
 ## 9. Build → merged 4 MB bin
 
-The QEMU machine is fixed at 4 MB and boots an ESP-IDF layout (loaded at offset `0x0`). The Rust
-app is linked at `0x10000` and needs a bootloader and partition table.
+The QEMU machine is fixed at 4 MB and boots an ESP-IDF layout (loaded at offset `0x0`). The
+`esp-idf-svc` build produces an IDF app ELF plus a bootloader and partition table; because std +
+IDF binaries are large, this project supplies its own partition table.
 
-1. `cargo +esp build --release --target xtensa-esp32-none-elf` (with
-   `build-std = ["core", "alloc"]` in `rust/.cargo/config.toml`).
-2. Produce the merged image with `espflash` (bundled IDF-compatible bootloader/partition table),
-   or by merging the `esp-bootloader-esp-idf` bootloader + partition table + app with the
-   container's `esptool.py`:
+1. **Partition table.** Add `rust/partitions.csv` with a large factory app, e.g.:
+   ```
+   # Name,   Type, SubType, Offset,  Size, Flags
+   nvs,      data, nvs,     ,        0x6000,
+   phy_init, data, phy,     ,        0x1000,
+   factory,  app,  factory, ,        0x300000,
+   ```
+   and point `sdkconfig.defaults` at it:
+   ```
+   CONFIG_PARTITION_TABLE_CUSTOM=y
+   CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+   ```
+   (The default IDF table caps the app at ~1 MB — the current C app is 808 KB; a std Rust app
+   will exceed that.)
+2. **Build** with the reused IDF 4.4 tree:
+   ```sh
+   . /opt/esp-idf-v4.4/export.sh
+   export IDF_PATH=/opt/esp-idf-v4.4 ESP_IDF_TOOLS_INSTALL_DIR=fromenv
+   export ESP_IDF_SDKCONFIG_DEFAULTS="$PWD/sdkconfig.defaults"
+   RUSTFLAGS="--cfg espidf_time32" \
+     cargo +esp build --release --target xtensa-esp32-espidf -Zbuild-std=std,panic_abort
+   ```
+   With `ESP_IDF_TOOLS_INSTALL_DIR=fromenv`, `esp-idf-sys` uses the already-installed 4.4.7
+   toolchain and emits the IDF bootloader/partition-table under its build output.
+3. **Merge.** Either let cargo-espflash reuse the `esp-idf-sys`-built bootloader/partition and
+   merge:
+   ```sh
+   cargo espflash save-image --chip esp32 --merge \
+     target/xtensa-esp32-espidf/release/rust-firmware dist/firmware.merged.bin
+   ```
+   or mirror `scripts/build.sh` and merge with the container's IDF 4.4 `esptool.py`:
    ```sh
    python "$ESPTOOL" --chip esp32 merge_bin \
      --output "$PWD/dist/firmware.merged.bin" --fill-flash-size 4MB \
-     0x1000  build/bootloader.bin \
-     0x8000  build/partition-table.bin \
-     0x10000 build/app.bin
+     0x1000  <idf-build>/bootloader/bootloader.bin \
+     0x8000  <idf-build>/partition_table/partition-table.bin \
+     0x10000 <idf-build>/rust-firmware.bin
    ```
-   Any of these must yield a 4 MB (`0x400000`) file — verify with `stat -c '%s'`.
-3. `espflash save-image --merge` is the preferred one-liner; mirror `scripts/build.sh`'s
-   absolute-`-o` rule (a relative `-o` inside `build/` becomes `build/build/...`).
+   Either way the result must be exactly 4 MB (`0x400000`); verify with `stat -c '%s'`.
+   Mirror `scripts/build.sh`'s absolute-`-o` rule (a relative `-o` inside `build/` becomes
+   `build/build/...`).
 
 ---
 
@@ -342,8 +412,10 @@ app is linked at `0x10000` and needs a bootloader and partition table.
 3. The emulator scenario(s) in scope print `RESULT: PASS` for the **Rust** bin.
 4. No warnings under `cargo clippy -- -D warnings`.
 5. `dist/firmware.merged.bin` is exactly 4 MB and boots in Velxio.
-6. Nothing outside `rust/` (plus the §8 volume) changed: `git status` shows no `main/`, `test/`,
-   `scripts/`, or `tests/` modifications.
+6. The firmware is std (`xtensa-esp32-espidf`), built with `--cfg espidf_time32` and against
+   IDF 4.4.7; `rust/partitions.csv` exists and gives the app a ≥ 3 MB factory partition.
+7. Nothing outside `rust/` (plus the §8 volume) changed: `git status` shows no `main/`,
+   `test/`, `scripts/`, or `tests/` modifications.
 
 ---
 
@@ -352,14 +424,18 @@ app is linked at `0x10000` and needs a bootloader and partition table.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `cargo: command not found` in the container | toolchain not provisioned | run `rust/scripts/provision-rust.sh` into the volume |
-| `/usr/bin/env: bad interpreter: Permission denied` running `rust/scripts/*.sh` | new files on the virtiofs mount are created without the execute bit | run via `bash scripts/provision-rust.sh`, or `chmod +x` the script |
-| Provision aborted mid-run | long download interrupted | just re-run `provision-rust.sh`; every step is idempotent and resumes |
 | `error: no such command: +esp` | `espup install` missing or toolchain not exported | re-run provision; source `$RUSTUP_HOME/env`, set `CARGO_HOME` |
-| Xtensa toolchain has no aarch64 build | host triple unsupported | stop; reassess (Phase 0.3 gate) |
-| Rust image does not boot in Velxio | fork expects IDF-4.4 boot/PHY | Phase 0 gate: keep Embassy for real HW, emulator scope reduced |
-| USB/TCP Wi-Fi never associates in Velxio | fork radio only models IDF 4.4 PHY | expected; see §12 |
-| `linkme` sections dropped / zero modules | esp-hal linker script | use `register_modules!` fallback (§5.2) |
-| Fewer than five modules in the banner | a plugin not registered | verify the distributed-slice tag / macro list entry |
+| `can't find crate for std` / `build-std` fails | `rust-src` component not installed for `esp` | `rustup component add rust-src --toolchain esp` (provision §4) |
+| `linker 'ldproxy' not found` | `ldproxy` not installed | `cargo install ldproxy` (provision §4) |
+| `/usr/bin/env: bad interpreter: Permission denied` running `rust/scripts/*.sh` | new files on the virtiofs mount are created without the execute bit | run via `bash scripts/provision-rust.sh`, or `chmod +x` the script |
+| I IDF `libc`/`time_t` link or size errors | wrong `espidf_time` cfg | set `RUSTFLAGS="--cfg espidf_time32"` on IDF 4.4 (not `time64`) |
+| `ESP_IDF_TOOLS_INSTALL_DIR=fromenv` errors | IDF environment not activated | `. /opt/esp-idf-v4.4/export.sh` first (and unset ambient v5 vars) |
+| Wrong IDF version built | ambient v5 `IDF_PATH` wins | unset `IDF_PATH IDF_PYTHON_ENV_PATH IDF_TOOLS_EXPORT_CMD IDF_TOOLS_INSTALL_CMD` before sourcing 4.4 |
+| `esp-idf-svc` pulls an IDF-5-only release | version not pinned | pin `esp-idf-svc = "=0.48.1"` (last pre-v4.4-deprecation line) |
+| `image_too_big` / app doesn't fit partition | default ~1 MB factory app | install `rust/partitions.csv` with a 3 MB factory app (§9) |
+| Fewer than five modules in the banner | a registration was GC'd by `--gc-sections` | use the `register_modules!` macro fallback (§5.2) |
+| Firmware crashes in `esp_phy_enable` (`phy_module_has_clock_bits`) | built against IDF 5.x | rebuild against `/opt/esp-idf-v4.4` (§9) |
+| Second Wi-Fi trigger reboots, `assert: esp_netif_create_default_wifi_sta` | Wi-Fi init re-run | make Wi-Fi init one-shot; only reconnect |
 | merged image ≠ 4 MB or fails to boot | missing bootloader/partition table or padding | re-merge with `--fill-flash-size 4MB` (§9) |
 | `merge-bin` writes `build/build/...` | relative `-o` under `build/` | pass an absolute `-o` (§9) |
 | Listener HTTP 503 | a build/test is already running | wait; requests are serialised |
@@ -371,23 +447,22 @@ app is linked at `0x10000` and needs a bootloader and partition table.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Velxio fork won't boot an `esp-hal` image at all | blocks all emulator parity | Phase 0.2 gate before porting |
-| `esp-radio` Wi-Fi incompatible with fork (IDF-4.4-PHY-only) | UC-5 never runs in emulator | Phase 0.4 gate; fallback below |
-| aarch64 Xtensa toolchain unavailable | blocks builds | Phase 0.3 gate |
-| `linkme` sections dropped | no autonomous registration | `register_modules!` macro fallback |
+| `esp-idf-svc` 0.48.x won't compile against IDF 4.4.7 | blocks the whole stack | Phase 0.2 gate before porting; step back to the exact last-good `esp-idf-sys` if needed |
+| Velxio fork won't boot an `esp-idf-svc` image | blocks all emulator parity | Phase 0.2 gate |
+| `esp-idf-svc` Wi-Fi incompatible with fork | UC-5 never runs in emulator | Phase 0.4 gate; fallback below |
+| std binary exceeds the flash partition | no boot | custom 3 MB factory partition (§9) |
+| aarch64 Xtensa toolchain unavailable | blocks builds | Phase 0.3 gate (passed) |
+| `linkme`/`inventory` registrations dropped | no autonomous registration | `register_modules!` macro fallback |
 | Browser iced cannot reach the slirp guest | UI only works on real HW | scope the UI to real hardware/LAN; leave emulator UI open |
 
-**Fallback (locked): single core, staged shells — do not build two firmwares up front.** If the
-Phase 0 Wi-Fi spike fails:
-1. Embassy remains the **only real-hardware** firmware.
+**Fallback (locked): single core, staged shells — do not build a second firmware up front.** If
+the Phase 0 Wi-Fi spike fails:
+1. `esp-idf-svc` remains the **only** firmware.
 2. Emulator/browser parity is scoped to **UC-1** (the emulator reliably models GPIO).
 3. UC-5 stays fully covered by **host `cargo test`** (pure logic) + real-hardware verification.
-4. Only if emulator Wi-Fi later becomes a hard requirement, add a thin `esp-idf-svc` (std,
-   linking the container's existing IDF 4.4 tree) shell that reuses `tea-core`/`tea-platform`
-   and swaps only commands/hardware. It is a bounded addition, not a fork.
 
-Rationale: two shells double the embedding surface for zero extra logic value; the shared core
-makes deferring safe.
+Rationale: the shared pure core makes deferring safe; a second firmware would double the
+embedding surface for zero extra logic value.
 
 ---
 
@@ -402,5 +477,5 @@ makes deferring safe.
 - `tests/velxio/scenarios/uc1_button_toggle.yaml`, `tests/velxio/scenarios/fetch_and_uart.yaml`.
 - `scripts/build.sh`, `scripts/test.sh`, `scripts/provision-idf44.sh` — build/provision patterns.
 - `docs/runbooks/add_use_case.md`, `docs/runbooks/add_testing_simulator.md`.
-- Espressif: *The Rust on ESP Book* (toolchain/`espup`), `esp-hal` (`esp-radio`,
-  `embassy-executor`), `espflash` `save-image`.
+- esp-rs: `esp-idf-svc` (0.48.x), `esp-idf-hal`, `esp-idf-sys`; *The Rust on ESP Book*
+  (std/`esp-idf-svc` track); `espflash` `save-image`.
