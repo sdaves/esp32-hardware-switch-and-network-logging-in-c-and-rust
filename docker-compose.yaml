@@ -9,6 +9,11 @@ services:
       # `down`/`up` does not re-clone it. `down -v` (or deleting the volume)
       # triggers a fresh provision on the next start.
       - idf44:/opt/esp-idf-v4.4
+      # Persist the aarch64 Rust/Xtensa toolchain (rustup + espup + espflash +
+      # GCC/LLVM under /opt/esp-rust) across container recreation. Provisioned
+      # on demand by rust/scripts/provision-rust.sh; not in the startup command
+      # so a container start never re-downloads the multi-GB toolchain.
+      - esp-rust:/opt/esp-rust
     ports:
       - "3080:80"
       - "8001:8001"
@@ -24,3 +29,4 @@ services:
 
 volumes:
   idf44:
+  esp-rust:

@@ -98,6 +98,30 @@ the same logic is unit-tested on the desktop and shipped to silicon.
 
 Do this before porting anything. It de-risks the entire project in about a day.
 
+### Phase 0 progress log
+
+- [x] **0.1 Provision** — done. The `esp-rust` volume (§8) is mounted, and
+  `rust/scripts/provision-rust.sh` installed: `stable-aarch64-unknown-linux-gnu` (with
+  `wasm32-unknown-unknown`), the `esp` toolchain, `cargo install espup espflash`, and the
+  Xtensa GCC/LLVM export at `/opt/esp-rust/export-esp.sh`.
+- [x] **0.3 aarch64 gate** — pass. The Espressif fork publishes an aarch64 host build; the
+  `esp` toolchain resolves and installs on this container (no cross-arch problem).
+- [ ] **0.2 Hello-world spike** — pending.
+- [ ] **0.4 Wi-Fi spike** — pending.
+
+Measured toolchain facts (use these exact paths/names elsewhere in the runbook):
+
+| Fact | Value |
+|---|---|
+| Rust root / volume | `/opt/esp-rust` (`esp-rust` named volume) |
+| `RUSTUP_HOME` | `/opt/esp-rust/rustup` |
+| `CARGO_HOME` | `/opt/esp-rust/cargo` (binaries at `cargo/bin`) |
+| `HOME` | `/opt/esp-rust/home` (so espup's `~/.espressif` lands in the volume) |
+| Firmware toolchain | `esp` (`cargo +esp …`) |
+| Host toolchain | `stable-aarch64-unknown-linux-gnu` (default) |
+| Xtensa env script | `/opt/esp-rust/export-esp.sh` (sets `PATH` + `LIBCLANG_PATH`) |
+| `espup`/`espflash` | `/opt/esp-rust/cargo/bin/{espup,espflash}` |
+
 1. **Provision** (idempotent, mirrors `scripts/provision-idf44.sh`):
    `rust/scripts/provision-rust.sh` installs rustup (aarch64), `cargo install espup espflash`,
    `espup install --targets esp32`, and adds the `wasm32-unknown-unknown` target. All roots
@@ -113,9 +137,8 @@ Do this before porting anything. It de-risks the entire project in about a day.
      --scenario tests/velxio/scenarios/uc1_button_toggle.yaml   # temporary; expect a marker
    ```
    Confirm the app boots and emits serial.
-3. **aarch64 gate.** Confirm the Espressif Rust fork publishes an **aarch64** host build
-   (high confidence; `openocd-esp32-linux-arm64` already exists in the image). If not, stop and
-   reassess before writing code.
+3. **aarch64 gate.** ~~Confirm the Espressif Rust fork publishes an **aarch64** host build~~
+   **PASSED** (see progress log): the `esp` toolchain installs on aarch64.
 4. **Wi-Fi spike.** Build a minimal `esp-radio` + `embassy-net` DHCP + HTTP-GET image and boot
    it in Velxio. Record whether the fork's radio comes up at all.
 
@@ -251,7 +274,9 @@ This phase is deferred until Phases 1–2 are green.
 ## 8. The one edit outside `rust/` (container toolchain persistence)
 
 The named-volume decision requires adding a volume and mount to root `docker-compose.yaml` so
-the aarch64 Xtensa toolchain survives `down`/`up`, exactly like `idf44:/opt/esp-idf-v4.4`:
+the aarch64 Xtensa toolchain survives `down`/`up`, exactly like `idf44:/opt/esp-idf-v4.4`.
+**Applied** — `docker-compose.yaml` now mounts `esp-rust:/opt/esp-rust` and declares the
+`esp-rust` volume; the container was recreated with `/up` and the mount verified:
 
 ```yaml
     volumes:
@@ -327,6 +352,8 @@ app is linked at `0x10000` and needs a bootloader and partition table.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `cargo: command not found` in the container | toolchain not provisioned | run `rust/scripts/provision-rust.sh` into the volume |
+| `/usr/bin/env: bad interpreter: Permission denied` running `rust/scripts/*.sh` | new files on the virtiofs mount are created without the execute bit | run via `bash scripts/provision-rust.sh`, or `chmod +x` the script |
+| Provision aborted mid-run | long download interrupted | just re-run `provision-rust.sh`; every step is idempotent and resumes |
 | `error: no such command: +esp` | `espup install` missing or toolchain not exported | re-run provision; source `$RUSTUP_HOME/env`, set `CARGO_HOME` |
 | Xtensa toolchain has no aarch64 build | host triple unsupported | stop; reassess (Phase 0.3 gate) |
 | Rust image does not boot in Velxio | fork expects IDF-4.4 boot/PHY | Phase 0 gate: keep Embassy for real HW, emulator scope reduced |
