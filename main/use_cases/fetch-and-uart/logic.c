@@ -1,0 +1,25 @@
+#include "domain.h"
+
+Model fetch_and_uart_init(void)
+{
+    return (Model){ .synced = false };
+}
+
+UpdateResult fetch_and_uart_update(Model model, Msg msg)
+{
+    UpdateResult result = {
+        .next = model,
+        .command = { .type = CMD_NONE },
+    };
+
+    switch (msg.type) {
+    case MSG_DB_QUERY_RESULT_READY:
+        if (msg.success) {
+            result.command.type = CMD_SEND_UART;
+            result.next.synced = true;
+        }
+        break;
+    }
+
+    return result;
+}

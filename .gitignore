@@ -1,0 +1,34 @@
+# --- ESP-IDF / firmware build artifacts ---
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+*.o
+*.a
+*.d
+*.obj
+
+# --- Native host test binaries/objects ---
+test/test_toggle_led
+test/test_event_bus
+test/toggle_logic.o
+test/mock_registry.o
+test/*.o
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# --- Logs ---
+*.log

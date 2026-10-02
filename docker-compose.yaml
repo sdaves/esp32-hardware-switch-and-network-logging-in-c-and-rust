@@ -1,0 +1,14 @@
+services:
+  velxio:
+    image: ghcr.io/davidmonterocrespo24/velxio:master
+    container_name: esp32sim-velxio
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    ports:
+      - "3080:80"
+      - "8001:8001"
+    entrypoint: ["/bin/bash", "-lc"]
+    command:
+      - "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq --no-install-recommends gcc make libc6-dev >/dev/null 2>&1 || true; python3 -m pip install --no-cache-dir --quiet websockets pyyaml || pip3 install --no-cache-dir --quiet websockets pyyaml; cd /app && exec ./entrypoint.sh"
+    restart: unless-stopped
