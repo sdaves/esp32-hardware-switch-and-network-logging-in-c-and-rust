@@ -1,0 +1,60 @@
+{
+  "format": "velxio-project",
+  "version": 1,
+  "exportedAt": "2026-10-02T00:00:00.000Z",
+  "name": "esp32simulated",
+  "boards": [
+    {
+      "id": "esp",
+      "name": "ESP32-S3 DevKitC-1",
+      "boardKind": "esp32-s3",
+      "x": 120,
+      "y": 80,
+      "activeFileGroupId": "group-esp",
+      "languageMode": "espidf",
+      "serialBaudRate": 115200
+    }
+  ],
+  "fileGroups": {
+    "group-esp": [
+      {
+        "name": "main/main.c",
+        "content": "/* Firmware is uploaded as a prebuilt .bin (build/firmware.merged.bin).\n * This placeholder exists only so the project loads; it is not compiled\n * when a binary is uploaded directly. */\n"
+      }
+    ]
+  },
+  "folderGroups": {
+    "group-esp": ["main"]
+  },
+  "components": [
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "x": 320,
+      "y": 60,
+      "properties": { "color": "green", "label": "BOOT" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "x": 360,
+      "y": 160,
+      "properties": { "value": "220" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "x": 460,
+      "y": 150,
+      "properties": { "color": "red", "label": "LED" }
+    }
+  ],
+  "wires": [
+    { "id": "w1", "from": ["esp", "0"],    "to": ["btn1", "1.l"],  "color": "green" },
+    { "id": "w2", "from": ["btn1", "2.l"], "to": ["esp", "GND.1"], "color": "black" },
+    { "id": "w3", "from": ["esp", "2"],    "to": ["r1", "1"],      "color": "green" },
+    { "id": "w4", "from": ["r1", "2"],     "to": ["led1", "A"],    "color": "green" },
+    { "id": "w5", "from": ["led1", "C"],   "to": ["esp", "GND.2"], "color": "black" }
+  ],
+  "activeBoardId": "esp"
+}

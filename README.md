@@ -142,6 +142,7 @@ when the listener runs on the same host as your shell).
 │       └── …                      # other use-case plugins (stubs)
 ├── test/                     # native desktop C tests (mock event bus)
 ├── tests/velxio/             # Wokwi circuit + YAML scenarios + Python WS runner
+│   └── esp32simulated.vlx    # importable Velxio project for the browser editor
 ├── scripts/                  # build.sh / test.sh / scenario.sh
 └── AGENTS.md                 # architecture + iteration contract
 ```
@@ -173,6 +174,67 @@ Because the OSS emulator bridge does not reliably emit output-pin `gpio_change`
 events, UC-1 asserts the LED through a firmware `printf`
 (`# LED ON (gpio 2)` / `# LED OFF (gpio 2)`) and `wait-serial`, rather than
 reading the pin. Input injection (`esp32_gpio_in`) does work.
+
+---
+
+## Interactive browser debugging
+
+`make test` runs the firmware headlessly, but you can also drive the very same
+firmware by hand in the Velxio web GUI — press the on-screen button, watch the
+LED, and read the serial monitor live. The Python harness and the GUI share one
+emulator backend, so what you see here matches the automated scenario.
+
+The stack already serves the editor at **http://localhost:3080/editor**. No
+project source files are compiled in the browser; you import a pre-built circuit
+and upload the `.bin` you build here.
+
+### 1. Build the firmware image
+
+```sh
+make build          # produces build/firmware.merged.bin (4 MB, QEMU-ready)
+```
+
+### 2. Open the editor
+
+In a browser on the host, go to **http://localhost:3080/editor**.
+
+### 3. Import the circuit
+
+`tests/velxio/esp32simulated.vlx` declares the board and wiring that the CLI
+scenarios use — an ESP32-S3 with the BOOT button on GPIO0 and the LED on GPIO2:
+
+1. In the editor, open **Import project**.
+2. Choose `tests/velxio/esp32simulated.vlx`.
+   (The editor imports a `.vlx` project, not a folder.)
+
+The canvas should show the ESP32-S3 board, `btn1` (BOOT), `r1` (220 Ω) and
+`led1`, wired exactly as in `tests/velxio/diagram.json`.
+
+### 4. Upload the firmware binary
+
+1. Use the editor's **Upload firmware** action (`.bin`, `.hex`, `.elf`, `.ihex`).
+2. Select `build/firmware.merged.bin` — uploading a prebuilt image bypasses the
+   in-browser compiler entirely.
+3. Start the simulation.
+
+### 5. Drive it and read the output
+
+- Open the **Serial Monitor** at **115200** baud. The boot log should read
+  `Platform Engine Initializing: Found 5 Autonomous Modules.`
+- Press **BOOT** (or the on-screen `btn1`); each press toggles the LED and the
+  monitor prints the firmware markers:
+  - UC-1: `# LED ON (gpio 2)` / `# LED OFF (gpio 2)`
+  - UC-5: `# UART SENT` then `# NETWORK SYNCED`
+
+### Notes
+
+- The `.vlx` is a **circuit-only** project: it contains a placeholder `main.c`
+  and is never compiled unless you press **Compile** without uploading a binary.
+  Always upload `build/firmware.merged.bin` to run the real firmware.
+- To iterate, `make build` again and re-upload the new `.bin`; no editor project
+  changes are needed.
+- The `.vlx` mirrors `tests/velxio/diagram.json`. If you change the circuit,
+  update both so the GUI and the headless scenario stay in step.
 
 ---
 
