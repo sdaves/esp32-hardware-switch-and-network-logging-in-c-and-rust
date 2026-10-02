@@ -12,8 +12,20 @@ make -C test
 
 curl -fsS "$VELXIO_HTTP/health" >/dev/null
 
-python3 -m tests.velxio.runner.run_scenario \
-  --server "$VELXIO_WS" \
-  --firmware build/firmware.merged.bin \
-  --diagram tests/velxio/diagram.json \
-  --scenario tests/velxio/scenarios/uc1_button_toggle.yaml
+# Run every scenario in tests/velxio/scenarios/, in filename order, so adding a
+# use case's YAML automatically extends `make test`. Any failing scenario aborts
+# the run (set -e + explicit exit).
+scenarios=(tests/velxio/scenarios/*.yaml)
+if [ ! -e "${scenarios[0]}" ]; then
+  echo "no scenarios found in tests/velxio/scenarios/" >&2
+  exit 2
+fi
+
+for scenario in "${scenarios[@]}"; do
+  echo "== scenario: $(basename "$scenario")"
+  python3 -m tests.velxio.runner.run_scenario \
+    --server "$VELXIO_WS" \
+    --firmware build/firmware.merged.bin \
+    --diagram tests/velxio/diagram.json \
+    --scenario "$scenario"
+done

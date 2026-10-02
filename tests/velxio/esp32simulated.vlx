@@ -1,60 +1,149 @@
 {
   "format": "velxio-project",
   "version": 1,
-  "exportedAt": "2026-10-02T00:00:00.000Z",
+  "exportedAt": "2026-10-02T06:49:18.549Z",
   "name": "esp32simulated",
   "boards": [
     {
-      "id": "esp",
-      "name": "ESP32-S3 DevKitC-1",
+      "id": "esp32-s3",
       "boardKind": "esp32-s3",
-      "x": 120,
-      "y": 80,
-      "activeFileGroupId": "group-esp",
+      "x": -93.21902306863018,
+      "y": 44.399777995746774,
+      "activeFileGroupId": "group-esp32-s3",
       "languageMode": "espidf",
       "serialBaudRate": 115200
     }
   ],
   "fileGroups": {
-    "group-esp": [
+    "group-esp32-s3": [
       {
         "name": "main/main.c",
         "content": "/* Firmware is uploaded as a prebuilt .bin (build/firmware.merged.bin).\n * This placeholder exists only so the project loads; it is not compiled\n * when a binary is uploaded directly. */\n"
       }
     ]
   },
-  "folderGroups": {
-    "group-esp": ["main"]
-  },
   "components": [
     {
-      "type": "wokwi-pushbutton",
-      "id": "btn1",
-      "x": 320,
-      "y": 60,
-      "properties": { "color": "green", "label": "BOOT" }
+      "id": "btn_1790923507000_btn",
+      "metadataId": "pushbutton",
+      "x": 69.80373823491543,
+      "y": -41.43650183039254,
+      "properties": {
+        "label": "BOOT",
+        "color": "green",
+        "pressed": false
+      }
     },
     {
-      "type": "wokwi-resistor",
-      "id": "r1",
-      "x": 360,
-      "y": 160,
-      "properties": { "value": "220" }
+      "id": "r_1790923507001_res",
+      "metadataId": "resistor",
+      "x": 69.80373823491543,
+      "y": 20.0,
+      "properties": {
+        "value": "220"
+      }
     },
     {
-      "type": "wokwi-led",
-      "id": "led1",
-      "x": 460,
-      "y": 150,
-      "properties": { "color": "red", "label": "LED" }
+      "id": "led_1790923507171_w1hbt87nj",
+      "metadataId": "led",
+      "x": 69.80373823491543,
+      "y": 81.56349816960746,
+      "properties": {
+        "value": false,
+        "brightness": 1,
+        "color": "red",
+        "lightColor": null,
+        "label": "",
+        "flip": false
+      }
     }
   ],
   "wires": [
-    { "id": "w1", "from": ["esp", "0"],    "to": ["btn1", "1.l"],  "color": "green" },
-    { "id": "w2", "from": ["btn1", "2.l"], "to": ["esp", "GND.1"], "color": "black" },
-    { "id": "w3", "from": ["esp", "2"],    "to": ["r1", "1"],      "color": "green" },
-    { "id": "w4", "from": ["r1", "2"],     "to": ["led1", "A"],    "color": "green" },
-    { "id": "w5", "from": ["led1", "C"],   "to": ["esp", "GND.2"], "color": "black" }
+    {
+      "id": "wire-btn-esp",
+      "start": {
+        "componentId": "btn_1790923507000_btn",
+        "pinName": "1.l",
+        "x": 50.80373823491543,
+        "y": -51.43650183039254
+      },
+      "end": {
+        "componentId": "esp32-s3",
+        "pinName": "0",
+        "x": 27.78097693136982,
+        "y": 60.39977799574677
+      },
+      "color": "#22c55e",
+      "autoRouted": true
+    },
+    {
+      "id": "wire-btn-gnd",
+      "start": {
+        "componentId": "btn_1790923507000_btn",
+        "pinName": "2.l",
+        "x": 50.80373823491543,
+        "y": -21.43650183039254
+      },
+      "end": {
+        "componentId": "esp32-s3",
+        "pinName": "GND.1",
+        "x": 27.78097693136982,
+        "y": 82.39977799574677
+      },
+      "color": "#000000",
+      "autoRouted": true
+    },
+    {
+      "id": "wire-esp-r",
+      "start": {
+        "componentId": "esp32-s3",
+        "pinName": "2",
+        "x": 27.78097693136982,
+        "y": 133.39977799574677
+      },
+      "end": {
+        "componentId": "r_1790923507001_res",
+        "pinName": "1",
+        "x": 90.80373823491543,
+        "y": 0.0
+      },
+      "color": "#22c55e",
+      "autoRouted": true
+    },
+    {
+      "id": "wire-r-led",
+      "start": {
+        "componentId": "r_1790923507001_res",
+        "pinName": "2",
+        "x": 90.80373823491543,
+        "y": 40.0
+      },
+      "end": {
+        "componentId": "led_1790923507171_w1hbt87nj",
+        "pinName": "A",
+        "x": 100.80373823491543,
+        "y": 81.56349816960746
+      },
+      "color": "#22c55e",
+      "autoRouted": true
+    },
+    {
+      "id": "wire-led-gnd",
+      "start": {
+        "componentId": "led_1790923507171_w1hbt87nj",
+        "pinName": "C",
+        "x": 90.80373823491543,
+        "y": 91.56349816960746
+      },
+      "end": {
+        "componentId": "esp32-s3",
+        "pinName": "GND.2",
+        "x": 27.78097693136982,
+        "y": 82.39977799574677
+      },
+      "color": "#000000",
+      "autoRouted": true
+    }
   ],
-  "activeBoardId": "esp"
+  "activeBoardId": "esp32-s3"
 }

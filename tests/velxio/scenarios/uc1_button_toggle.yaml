@@ -3,12 +3,12 @@ version: 1
 steps:
   - wait-serial: "Platform Engine Initializing"
   - set-control: { part-id: btn1, control: pressed, value: 1 }
-  - delay: 400ms
+  - delay: 200ms
   - set-control: { part-id: btn1, control: pressed, value: 0 }
-  - delay: 400ms
+  - delay: 250ms
   - wait-serial: "# LED ON"
   - set-control: { part-id: btn1, control: pressed, value: 1 }
-  - delay: 400ms
+  - delay: 200ms
   - set-control: { part-id: btn1, control: pressed, value: 0 }
-  - delay: 400ms
+  - delay: 250ms
   - wait-serial: "# LED OFF"

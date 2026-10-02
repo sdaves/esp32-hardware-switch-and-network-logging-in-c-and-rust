@@ -52,7 +52,8 @@ my_esp32_project/
 │   └── test_event_bus.c                 # Integration validation checking for multi-step routing
 └── tests/velxio/                        # Python WebSocket simulator harness
     ├── diagram.json                     # Wokwi circuit (parts + board connections)
-    ├── scenarios/uc1_button_toggle.yaml # Per-use-case scenario steps
+    ├── scenarios/*.yaml                 # Per-use-case scenarios (all run by `test.sh`)
+    ├── esp32simulated.vlx               # Importable Velxio project for the browser GUI
     └── runner/                          # ws_client / diagram_map / scenario / run_scenario
 ```
 
@@ -119,12 +120,16 @@ only importable with that working directory). Ports: host `3080 → nginx :80`, 
 ### `scripts/build.sh` / `scripts/test.sh`
 `build.sh` sources ESP-IDF, sets target `esp32s3` once, builds, then merges a flash image with
 `idf.py merge-bin --fill-flash-size 4MB -o "$PWD/build/firmware.merged.bin"`. `test.sh` runs
-`make -C test`, then `build.sh`, then drives the UC-1 scenario. Both default to the in-container
-addresses (`VELXIO_HTTP=http://localhost`, `VELXIO_WS=ws://localhost`); override them to target
-the host-published ports.
+`make -C test`, then `build.sh`, then runs **every** scenario in `tests/velxio/scenarios/*.yaml`
+in filename order (a failing scenario aborts the run). This is the definition of `make test`:
+native tests + firmware build + the full emulator scenario suite. Adding a use case's YAML under
+`scenarios/` automatically extends `make test` — no edit to `test.sh`. Both scripts default to
+the in-container addresses (`VELXIO_HTTP=http://localhost`, `VELXIO_WS=ws://localhost`); override
+them to target the host-published ports.
 
 ### `tests/velxio/`
-`diagram.json` (Wokwi circuit), `scenarios/uc1_button_toggle.yaml` (steps), and `runner/`
+`diagram.json` (Wokwi circuit), `scenarios/*.yaml` (per-use-case steps, all driven by `test.sh`),
+`esp32simulated.vlx` (importable Velxio project for the browser editor), and `runner/`
 (`ws_client.py` session, `diagram_map.py` circuit→pin resolver, `scenario.py` step executor,
 `run_scenario.py` CLI). `run_scenario.py` exits `0` pass, `1` fail, `2` config error.
 
@@ -139,7 +144,7 @@ with HTTP to drive `docker compose` and report results. Routes:
 | `curl -sS http://host.docker.internal:2222/build` | `docker compose up --build -d` (streams log) |
 | `curl -sS http://host.docker.internal:2222/up` | `docker compose up -d` |
 | `curl -sS --max-time 2400 http://host.docker.internal:2222/build-firmware` | runs `scripts/build.sh` inside the container |
-| `curl -sS --max-time 1200 http://host.docker.internal:2222/test` | runs `scripts/test.sh` inside the container (native tests + firmware + emulator scenario) |
+| `curl -sS --max-time 1200 http://host.docker.internal:2222/test` | runs `scripts/test.sh` inside the container (native tests + firmware + all emulator scenarios) |
 | `curl -sS http://host.docker.internal:2222/logs` | `docker compose logs --tail=2000 --no-color` |
 | `curl -sS http://host.docker.internal:2222/ps` | `docker compose ps` |
 | `curl -sS http://host.docker.internal:2222/down` | `docker compose down` |
@@ -262,10 +267,11 @@ that a hard build failure by design.
 
 ### 6.5 Definition of done (per iteration)
 
-1. `make -C test` → `test_toggle_led: PASS`, `test_event_bus: PASS`.
+1. `make -C test` → `test_toggle_led: PASS`, `test_event_bus: PASS`, `test_fetch_and_uart: PASS`.
 2. `/build-firmware` exits 0 and the boot log prints
    `Platform Engine Initializing: Found 5 Autonomous Modules.`
-3. `/test` prints `RESULT: PASS` and exits 0 (native tests + firmware + UC-1 scenario).
+3. `/test` prints `RESULT: PASS` for every scenario under `tests/velxio/scenarios/` and exits 0
+   (native tests + firmware + all emulator scenarios).
 4. No new compiler warnings under `-Werror`.
 
 ### 6.6 Troubleshooting (observed)

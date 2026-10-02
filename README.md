@@ -81,13 +81,15 @@ make logs
 
 ```sh
 make build       # idf.py build + merge a 4 MB firmware image
-make test        # native tests + firmware build + UC-1 emulator scenario
+make test        # native tests + firmware build + ALL emulator scenarios
 ```
 
-`make test` runs the native C unit tests, builds the firmware, and drives the
-UC-1 button/LED scenario in the emulator. A successful run ends with
-`RESULT: PASS` and exit code `0`; the boot log reports
-`Platform Engine Initializing: Found 5 Autonomous Modules.`
+`make test` runs the native C unit tests, builds the firmware, and then runs
+**every** scenario in `tests/velxio/scenarios/*.yaml` (currently UC-1 and UC-5),
+in filename order. Each scenario ends with `RESULT: PASS`, the command exits `0`
+only if all of them pass (a failing scenario aborts the run), and the boot log
+reports `Platform Engine Initializing: Found 5 Autonomous Modules.` Adding a new
+`scenarios/*.yaml` automatically extends `make test` — no edit to any script.
 
 ### 4. Iterate
 
@@ -114,7 +116,7 @@ make down
 | `make logs` | Tail the Velxio container log. |
 | `make ps` | Show container status. |
 | `make build` | Build firmware: `idf.py build` + 4 MB `merge-bin`. |
-| `make test` | Native tests + firmware build + UC-1 emulator scenario. |
+| `make test` | Native tests + firmware build + all emulator scenarios (`tests/velxio/scenarios/*.yaml`). |
 | `make native-test` | Desktop C unit tests only (`make -C test`). |
 | `make scenario NAME=<name>` | Run one emulator scenario (default `uc1_button_toggle`). |
 | `make exec CMD='<shell>'` | Run a shell command inside the Velxio container. |
@@ -162,13 +164,17 @@ make native-test
 ```
 
 **Emulator tests** — the real firmware on emulated ESP32-S3, driven over a
-WebSocket session. Each use case gets a `diagram.json` circuit and a
-`scenarios/*.yaml` file:
+WebSocket session. Each use case gets a `scenarios/*.yaml` file (sharing the
+`diagram.json` circuit):
 
 ```sh
+make test                       # native tests + firmware + every scenario
 make build
-make scenario NAME=uc1_button_toggle
+make scenario NAME=uc1_button_toggle   # run just one scenario, no rebuild
 ```
+
+`make test` executes **all** files under `tests/velxio/scenarios/` in filename
+order and aborts on the first failure; `make scenario NAME=…` runs a single one.
 
 Because the OSS emulator bridge does not reliably emit output-pin `gpio_change`
 events, UC-1 asserts the LED through a firmware `printf`
@@ -207,8 +213,11 @@ scenarios use — an ESP32-S3 with the BOOT button on GPIO0 and the LED on GPIO2
 2. Choose `tests/velxio/esp32simulated.vlx`.
    (The editor imports a `.vlx` project, not a folder.)
 
-The canvas should show the ESP32-S3 board, `btn1` (BOOT), `r1` (220 Ω) and
-`led1`, wired exactly as in `tests/velxio/diagram.json`.
+The canvas should show the ESP32-S3 board, a BOOT pushbutton on **GPIO0**, a
+220 Ω resistor, and a red LED on **GPIO2**, wired as in `tests/velxio/diagram.json`:
+`GPIO0 → button → GND`, and `GPIO2 → 220 Ω → LED anode (A)`, `LED cathode (C) → GND`.
+The button is active-low (the board's external pull-up holds GPIO0 high; pressing
+it pulls the pin low), matching the firmware's `INPUT_PULLUP` read.
 
 ### 4. Upload the firmware binary
 
