@@ -137,10 +137,13 @@ the in-container addresses (`VELXIO_HTTP=http://localhost`, `VELXIO_WS=ws://loca
 them to target the host-published ports.
 
 ### `scripts/dev-http-server.{sh,py}`
-A tiny HTTP endpoint on the container's `:8000`. The QEMU guest reaches the container at the
-slirp gateway `192.168.4.2`, so UC-5's firmware does `GET http://192.168.4.2:8000/editor` and
-receives a real `200`. `start|stop|status` via the shell wrapper; `test.sh` starts it
-automatically.
+A reverse proxy on the container's `:8000`. The QEMU guest reaches the container at the slirp
+gateway `192.168.4.2`, so UC-5's firmware does `GET http://192.168.4.2:8000/editor`; the server
+forwards the request to the parent machine at `VELXIO_PROXY_UPSTREAM` (default
+`http://host.docker.internal:8000`) and returns its real response. If the parent is unreachable,
+it answers with a deterministic `200` stub (`VELXIO_PROXY_FALLBACK=1`, the default) so
+`make test` stays green; set `VELXIO_PROXY_FALLBACK=0` to surface a `502`. `start|stop|status`
+via the shell wrapper; `test.sh` starts it automatically.
 
 ### `tests/velxio/`
 `diagram.json` (Wokwi circuit), `scenarios/*.yaml` (per-use-case steps, all driven by `test.sh`),

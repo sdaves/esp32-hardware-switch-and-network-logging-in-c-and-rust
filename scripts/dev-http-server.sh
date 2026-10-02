@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Start/stop the small HTTP endpoint the emulated guest fetches.
+# Start/stop the reverse proxy the emulated guest fetches.
 #
 # The Velxio QEMU guest reaches the container at the slirp gateway
-# (192.168.4.2). This server listens on the container's :8000 so UC-5's
-# Wi-Fi HTTP GET returns a real response.
+# (192.168.4.2). This listens on the container's :8000 and proxies to the
+# parent machine (VELXIO_PROXY_UPSTREAM, default host.docker.internal:8000),
+# so UC-5's Wi-Fi HTTP GET returns the parent's real response. With
+# VELXIO_PROXY_FALLBACK=1 (default) an unreachable parent yields a 200 stub so
+# `make test` stays deterministic.
 #
 #   scripts/dev-http-server.sh start|stop|status
 set -euo pipefail

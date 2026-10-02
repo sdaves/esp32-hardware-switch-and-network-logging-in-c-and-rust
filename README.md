@@ -184,9 +184,13 @@ reading the pin. Input injection (`esp32_gpio_in`) does work.
 
 UC-5 does a **real Wi-Fi + HTTP fetch**: pressing its NET button (GPIO4) joins
 the emulator's `Espressif` AP, gets an IP, and `GET`s
-`http://192.168.4.2:8000/editor` (the slirp gateway, i.e. this container) via
-`scripts/dev-http-server.py`. The scenario asserts `# WIFI CONNECTED`,
-`-> status 200`, the response body, and `# NETWORK SYNCED`.
+`http://192.168.4.2:8000/editor` (the slirp gateway, i.e. this container).
+`scripts/dev-http-server.py` is a reverse proxy: it forwards that request to the
+parent machine at `http://host.docker.internal:8000` and returns the real
+response. The scenario asserts `# WIFI CONNECTED`, `-> status 200`, a response
+body, and `# NETWORK SYNCED`. When the parent's `:8000` is unreachable the proxy
+answers a deterministic `200` stub so `make test` still passes
+(`VELXIO_PROXY_FALLBACK=0` to require the parent instead).
 
 > **Board and toolchain note.** The QEMU fork only models a Wi-Fi radio on the
 > **classic ESP32**, and only under **ESP-IDF 4.4** (IDF 5.x's `esp_phy_enable`
@@ -257,8 +261,11 @@ because it is the only board whose emulated QEMU machine has a Wi-Fi radio.
 ### Notes
 
 - UC-5's fetch targets `http://192.168.4.2:8000/editor`, the slirp gateway (the
-  container). Make sure the endpoint is up:
-  `./scripts/dev-http-server.sh start` (the headless `make test` starts it for you).
+  container), which reverse-proxies to the parent machine at
+  `http://host.docker.internal:8000` (`VELXIO_PROXY_UPSTREAM` to override).
+  Make sure the proxy is up: `./scripts/dev-http-server.sh start` (the headless
+  `make test` starts it for you). If the parent's `:8000` is down, the proxy
+  returns a `200` stub unless `VELXIO_PROXY_FALLBACK=0`.
 - The `.vlx` is a **circuit-only** project: it contains a placeholder `main.c`
   and is never compiled unless you press **Compile** without uploading a binary.
   Always upload `build/firmware.merged.bin` to run the real firmware.
