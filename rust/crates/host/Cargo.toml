@@ -1,0 +1,11 @@
+[package]
+name = "tea-host"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tea-core = { path = "../tea-core" }
+tea-platform = { path = "../tea-platform" }

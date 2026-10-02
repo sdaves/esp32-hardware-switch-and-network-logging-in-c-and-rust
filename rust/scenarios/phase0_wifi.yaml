@@ -1,8 +1,0 @@
-name: Phase 0 Wi-Fi + HTTP GET (Rust, esp-idf-svc)
-version: 1
-steps:
-  - wait-serial: "Platform Engine Initializing: Found 0 Autonomous Modules."
-  - wait-serial: "# WIFI CONNECTED (Espressif)"
-  - wait-serial: "-> status 200"
-  - wait-serial: "# HTTP BODY"
-  - wait-serial: "# NETWORK SYNCED"

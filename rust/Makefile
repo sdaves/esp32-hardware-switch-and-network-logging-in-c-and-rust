@@ -1,15 +1,14 @@
 # Rust port workspace entry points.
 #
 # All toolchain state lives under RUST_ROOT (default /opt/esp-rust), which is
-# the `esp-rust` named volume from docker-compose.yaml. Every target runs with
-# these env vars so rustup/cargo/espup resolve into the volume regardless of
-# the container's ambient state.
+# the `esp-rust` named volume from docker-compose.yaml. Route rustup/cargo (and
+# espup's provisioned toolchain) there. Do NOT override HOME or IDF_TOOLS_PATH:
+# the container's ESP-IDF tools live at the ambient $IDF_TOOLS_PATH
+# (/root/.espressif) and IDF's export.sh resolves the compiler/GDB tools from it.
 
 RUST_ROOT      ?= /opt/esp-rust
 export RUSTUP_HOME     = $(RUST_ROOT)/rustup
 export CARGO_HOME      = $(RUST_ROOT)/cargo
-export HOME            = $(RUST_ROOT)/home
-export IDF_TOOLS_PATH  = $(HOME)/.espressif
 export PATH           := $(CARGO_HOME)/bin:$(PATH)
 export ESP_ROOT        = $(CURDIR)
 
@@ -28,10 +27,10 @@ test:
 	./scripts/test.sh
 
 sim:
-	$(ESP_ENV) cargo run -p host
+	$(ESP_ENV) cargo run -p tea-host --bin sim
 
 scenario:
-	./scripts/scenario.sh
+	./scripts/scenario.sh $(NAME)
 
 wasm:
 	./scripts/wasm.sh

@@ -1,0 +1,13 @@
+name: UC-5 NET button triggers DB -> UART -> WiFi HTTP -> network sync chain (Rust)
+version: 1
+steps:
+  - wait-serial: "Platform Engine Initializing: Found 5 Autonomous Modules."
+  - set-control: { part-id: btn2, control: pressed, value: 1 }
+  - delay: 400ms
+  - set-control: { part-id: btn2, control: pressed, value: 0 }
+  - delay: 400ms
+  - wait-serial: "# UART SENT"
+  - wait-serial: "# WIFI CONNECTED"
+  - wait-serial: "-> status 200"
+  - wait-serial: "# HTTP BODY"
+  - wait-serial: "# NETWORK SYNCED"

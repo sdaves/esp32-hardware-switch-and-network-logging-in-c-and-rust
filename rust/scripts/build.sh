@@ -56,7 +56,7 @@ export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-} -fsigned-char"
 TARGET="xtensa-esp32-espidf"
 BIN_NAME="rust-firmware"
 
-cargo +esp build --release --target "$TARGET" -Zbuild-std=std,panic_abort
+cargo +esp build --release --target "$TARGET" -Zbuild-std=std,panic_abort -p "$BIN_NAME"
 
 TARGET_DIR="$(cargo metadata --format-version 1 --no-deps \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"

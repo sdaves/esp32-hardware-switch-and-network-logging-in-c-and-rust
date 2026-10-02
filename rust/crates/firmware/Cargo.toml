@@ -17,6 +17,8 @@ harness = false
 # 0.49.0 deprecated v4.4; current releases test only IDF 5.1+.
 esp-idf-svc = "=0.48.1"
 log = "0.4"
+tea-core = { path = "../tea-core" }
+tea-platform = { path = "../tea-platform" }
 
 [build-dependencies]
 embuild = "=0.31.3"

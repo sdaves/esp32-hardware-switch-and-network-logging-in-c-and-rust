@@ -1,0 +1,14 @@
+name: UC-1 button toggles the LED (Rust)
+version: 1
+steps:
+  - wait-serial: "Platform Engine Initializing: Found 5 Autonomous Modules."
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 200ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 250ms
+  - wait-serial: "# LED ON"
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 200ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 250ms
+  - wait-serial: "# LED OFF"

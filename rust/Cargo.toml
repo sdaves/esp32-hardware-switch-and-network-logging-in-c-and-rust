@@ -5,7 +5,21 @@
 # crates (pure `tea-core`, tests, iced UI) are added in later phases.
 [workspace]
 resolver = "2"
-members = ["crates/firmware"]
+members = [
+    "crates/tea-core",
+    "crates/tea-platform",
+    "crates/host",
+    "crates/firmware",
+]
+# Bare `cargo build`/`test`/`clippy` at the workspace root cover the host
+# crates only. `esp-idf-sys` refuses to build for non-ESP targets, so the
+# firmware must never be pulled into a host build; `scripts/build.sh` selects
+# it explicitly with `-p rust-firmware`.
+default-members = [
+    "crates/tea-core",
+    "crates/tea-platform",
+    "crates/host",
+]
 
 [workspace.package]
 edition = "2021"

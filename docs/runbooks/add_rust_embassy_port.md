@@ -420,6 +420,13 @@ Add the UC-2..UC-5 equivalents from `read-analog-sensor`, `fetch-and-save`, `rea
 **Phase 1 done when:** `cargo test` passes, the boot banner reports five modules, and
 `uc1_button_toggle.yaml` prints `RESULT: PASS` with the Rust bin.
 
+**Phase 1 status (2026-10-02): done.** See the completion log in
+[`add-rust-tea-pattern.md`](add-rust-tea-pattern.md) §0 for the three deviations that were
+needed (workspace `default-members`; Makefile must keep the ambient `IDF_TOOLS_PATH`;
+exhaustive-match style for clippy). Verified: host `cargo test` (10 tests) and
+`cargo clippy --all-targets -- -D warnings` clean; boot banner `Found 5 Autonomous Modules.`;
+4 MB image; UC-1 `RESULT: PASS`; `/opt/esp-idf-v4.4` clean.
+
 ---
 
 ## 6. Phase 2 — UC-2..UC-5 and full parity

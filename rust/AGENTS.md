@@ -23,8 +23,8 @@ distillation.
 | Phase | Scope | State |
 |---|---|---|
 | 0 | toolchain + hello-world + Wi-Fi spikes | **done** (2026-10-02) |
-| 1 | `tea-core` + `tea-platform` + `firmware` + `host`, UC-1 | next |
-| 2 | UC-2..UC-5 parity, emulator scenarios | pending |
+| 1 | `tea-core` + `tea-platform` + `firmware` + `host`, UC-1 | **done** (2026-10-02) |
+| 2 | UC-2..UC-5 parity, emulator scenarios | next |
 | 3 | iced dashboard (`ui`, native + wasm) | pending |
 
 Goal: one pure Rust TEA core (`tea-core`) shared by every shell, one std
