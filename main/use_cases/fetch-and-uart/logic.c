@@ -16,8 +16,11 @@ UpdateResult fetch_and_uart_update(Model model, Msg msg)
     case MSG_DB_QUERY_RESULT_READY:
         if (msg.success) {
             result.command.type = CMD_SEND_UART;
-            result.next.synced = true;
         }
+        break;
+    case MSG_UART_TX_DONE:
+        result.command.type = CMD_SYNC_NETWORK;
+        result.next.synced = true;
         break;
     }
 

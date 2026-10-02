@@ -73,6 +73,11 @@ Also read the one-line intent for the target in `AGENTS.md` §2.
 Then write down the behavior contract in one paragraph: what messages arrive, how `Model`
 changes, which `Cmd` is emitted, and how failures are routed.
 
+A stub's existing `logic.c` may encode only a partial chain (UC-5's stub marked the model
+`synced` on the first message and never emitted `CMD_SYNC_NETWORK`). Treat it as a starting
+point, not a fixed contract: finalize the transitions to the intent in `AGENTS.md` §2, and for a
+multi-stage chain add a feedback `MsgType` that the next stage consumes.
+
 ---
 
 ## 3. Conventions (hard rules)
@@ -292,7 +297,12 @@ the only symptom is a smaller `Found N Autonomous Modules.` banner. See `AGENTS.
      `-I../main -I../main/use_cases/<name>`;
    - link that object with `test_<feature>.o` (plus `mock_registry.o` if the test uses the mock
      bus) into `test_<feature>`;
-   - add the binary to `all`, and the objects/binary to `clean`.
+   - add the binary to `all`, and the objects/binary to `clean`;
+   - **include ordering matters.** Every plugin's header is named `domain.h`, and the existing
+     `INC` already points at `toggle-physical-led`. Appending `-I../main/use_cases/<name>`
+     *after* it makes the compiler read the wrong `domain.h` (symptoms: `implicit declaration`,
+     `no member named …`). Put the new directory *before* the toggle path, or give the new test
+     its own `-I../main -I../main/use_cases/<name>` set without the toggle path.
 3. Run:
    ```sh
    make native-test
@@ -305,18 +315,29 @@ the only symptom is a smaller `Found N Autonomous Modules.` banner. See `AGENTS.
 
 1. **Circuit** — if the use case introduces new parts/pins, extend `tests/velxio/diagram.json`
    (Wokwi format). `diagram_map.py` maps a part id to a board GPIO by walking `connections`,
-   ignoring power pins (`GND*`, `VIN*`, `3V3*`, `5V*`, `EN`) and preferring numeric pins.
-2. **Scenario** — add `tests/velxio/scenarios/<name>.yaml` using the step vocabulary from
-   `AGENTS.md` §6.3 (`delay`, `wait-serial`, `write-serial`, `set-control`, `expect-pin`). One
-   key per step.
-3. **Assertion strategy** — the OSS bridge does not reliably emit output-pin `gpio_change`
+   ignoring power pins (`GND*`, `VIN*`, `3V3*`, `5V*`, `EN`) and preferring numeric pins. A
+   part already in the circuit may be shared with another use case (UC-5 reuses UC-1's BOOT
+   button on GPIO0), so a new pin is often unnecessary.
+2. **Scenario** — add `tests/velxio/scenarios/<feature>.yaml` (snake_case the folder name, e.g.
+   `fetch-and-uart` → `fetch_and_uart.yaml`) using the step vocabulary from `AGENTS.md` §6.3
+   (`delay`, `wait-serial`, `write-serial`, `set-control`, `expect-pin`). One key per step.
+3. **Trigger** — an event-driven use case only runs when its inbound event is published, and
+   some stubs' events have **no producer** anywhere in the firmware (`fetch-and-uart` subscribes
+   to `EVENT_DB_QUERY_RESULT`, which nothing else publishes). Decide how the emulator reaches the
+   logic and record it in the §1 contract table:
+   - reuse an existing physical input (a button/pin already in `diagram.json`);
+   - add a `poll_timer_tick` that publishes the inbound event once or on a cadence;
+   - read UART RX via a `write-serial` step.
+   For a multi-stage chain, publish the feedback `MsgType` on the same event (the message size
+   must equal `sizeof(Msg)`) or add a new `SystemEventId` per §5.5.
+4. **Assertion strategy** — the OSS bridge does not reliably emit output-pin `gpio_change`
    events. Assert observable behaviour with a firmware `printf` marker and `wait-serial`
    (UC-1 uses `# LED ON (gpio 2)` / `# LED OFF (gpio 2)`). Input injection via `esp32_gpio_in`
    does work; allow ≥400 ms hold/release margins for the 2-tick (100 ms) debounce.
-4. **Run it:**
+5. **Run it:**
    ```sh
    make build
-   make scenario NAME=<name>
+   make scenario NAME=<feature>
    ```
    It must print `RESULT: PASS` (exit 0).
 
@@ -328,10 +349,11 @@ asks to promote this use case to the default; run the new scenario by name inste
 ## 9. Definition of done
 
 1. `make native-test` — every target, including the new one, prints `PASS`.
-2. `make build` — exits 0; boot log prints
-   `Platform Engine Initializing: Found N Autonomous Modules.` with N equal to the number of
-   folders in `main/use_cases/`.
-3. `make scenario NAME=<name>` — `RESULT: PASS`, exit 0.
+2. `make build` — exits 0 with no new warnings. The registration banner is a **runtime** message,
+   not a build message: confirm `Platform Engine Initializing: Found N Autonomous Modules.`
+   (N equal to the number of folders in `main/use_cases/`) in the emulator's boot serial, e.g.
+   via the scenario's first `wait-serial`.
+3. `make scenario NAME=<feature>` — `RESULT: PASS`, exit 0.
 4. `make test` — still `RESULT: PASS` (native tests + firmware + the UC-1 scenario).
 5. No new compiler warnings under `-Werror`.
 6. Status docs reflect reality: move the use case out of "stub" in `README.md` §Status and
@@ -346,6 +368,8 @@ asks to promote this use case to the default; run the new scenario by name inste
 | `Found N-1 Autonomous Modules` | new tag missing from `UC_MODULES`, or sources missing from `SRCS` | apply §6 |
 | `-Wswitch-enum` / `-Werror=switch` build error | a `switch` does not handle every enum value | enumerate all cases, remove any `default:` |
 | Native build fails with FreeRTOS/ESP headers | hardware code not guarded | wrap it in `#ifdef ESP_PLATFORM` |
+| Native test fails with `implicit declaration` / `no member named …` | wrong `domain.h` picked up because the new include came after `toggle-physical-led` | order the new use-case dir before the toggle path, or use a dedicated include set (§7) |
+| Use case never runs in the scenario | its inbound event has no producer in the firmware | add a trigger (§8.3): shared input, self-publishing poll tick, or `write-serial` |
 | Scenario `wait-serial` times out | marker string differs, or output not emitted | match the firmware `printf` exactly; assert on serial, not `gpio_change` |
 | Second trigger ignored | debounce margin too small | use ≥400 ms hold/release in the scenario |
 | Listener 503 | another build/test is running | wait; requests are serialised |
@@ -358,5 +382,7 @@ asks to promote this use case to the default; run the new scenario by name inste
 - `AGENTS.md` §2 (plugin map), §3 (four-file split), §6 (iteration, registration, troubleshooting).
 - `main/use_cases/toggle-physical-led/` — the reference implemented use case.
 - `test/test_toggle_led.c`, `test/Makefile` — reference native test.
-- `tests/velxio/scenarios/uc1_button_toggle.yaml` — reference scenario.
+- `tests/velxio/scenarios/uc1_button_toggle.yaml` — reference input-driven scenario.
+- `tests/velxio/scenarios/fetch_and_uart.yaml` — reference event-driven chain scenario (shared
+  input → bus event → UART → network sync).
 - `docs/runbooks/add_testing_simulator.md` — emulator protocol and rationale.

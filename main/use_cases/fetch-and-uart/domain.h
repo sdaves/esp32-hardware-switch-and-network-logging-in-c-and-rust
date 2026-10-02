@@ -6,6 +6,7 @@
 
 typedef enum {
     MSG_DB_QUERY_RESULT_READY = 0,
+    MSG_UART_TX_DONE,
 } MsgType;
 
 typedef struct {
@@ -37,5 +38,6 @@ UpdateResult fetch_and_uart_update(Model model, Msg msg);
 
 void fetch_and_uart_init_use_case_hardware(void);
 void execute_fetch_and_uart_hardware(const Cmd *command);
+bool fetch_and_uart_button_pressed(void);
 
 #endif

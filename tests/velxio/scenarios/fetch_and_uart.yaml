@@ -1,0 +1,10 @@
+name: UC-5 button triggers DB -> UART -> network sync chain
+version: 1
+steps:
+  - wait-serial: "Platform Engine Initializing"
+  - set-control: { part-id: btn1, control: pressed, value: 1 }
+  - delay: 400ms
+  - set-control: { part-id: btn1, control: pressed, value: 0 }
+  - delay: 400ms
+  - wait-serial: "# UART SENT"
+  - wait-serial: "# NETWORK SYNCED"

@@ -180,8 +180,12 @@ reading the pin. Input injection (`esp32_gpio_in`) does work.
 
 - **UC-1 (`toggle-physical-led`)** is implemented end-to-end: BOOT button on
   GPIO0 toggles the LED on GPIO2, validated natively and in the emulator.
-- The remaining use-case plugins exist and compile but their `commands.c`
-  implementations are stubs.
+- **UC-5 (`fetch-and-uart`)** is implemented end-to-end: a DB-query result sends
+  over UART and then syncs the network, triggered by the shared BOOT button and
+  validated natively and in the emulator (`make scenario NAME=fetch_and_uart`).
+- The remaining use-case plugins (`read-analog-sensor`, `fetch-and-save`,
+  `read-and-insert`) exist and compile but their `commands.c` implementations
+  are stubs.
 
 ---
 

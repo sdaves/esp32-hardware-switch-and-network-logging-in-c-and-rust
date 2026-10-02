@@ -13,7 +13,9 @@ sdkconfig.old
 # --- Native host test binaries/objects ---
 test/test_toggle_led
 test/test_event_bus
+test/test_fetch_and_uart
 test/toggle_logic.o
+test/fetch_and_uart_logic.o
 test/mock_registry.o
 test/*.o
 
