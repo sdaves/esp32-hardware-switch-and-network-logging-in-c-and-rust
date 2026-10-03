@@ -1,11 +1,12 @@
 # Runbook: Add a C cross-feature, event-driven behavior
 
-Status: ready — run for a new event
+Status: planned — current run is recorded in §9.1 (`EVENT_LED_TOGGLED`, UC-1 → UC-5)
 Audience: firmware maintainers and coding agents
 Scope: wire one use case to **react to another use case's state through the C event
 bus**, with no cross-feature `#include`. Parameterized by a `NEW_EVENT_NAME` and the
 producer/consumer features supplied when the runbook is invoked; the worked sample is
-UC-1's LED toggle causing UC-5 to fetch `/?led=on|off`.
+UC-1's LED toggle causing UC-5 to fetch `/?led=on|off`. Neutral event payloads live in
+`main/events.h` (§2.1).
 
 This is the C twin of [`add_rust_cross_feature_event.md`](add_rust_cross_feature_event.md).
 It teaches the mechanism **piece by piece**: first a simple message passes from a publisher
@@ -66,16 +67,59 @@ behavior is unchanged.
 
 ## 2. The input contract (fill from §0, then keep this table updated)
 
+The table below is filled for the **current run** (LED toggle → fetch); blank it for the
+next run.
+
 | Field | Value |
 |---|---|
-| Event name | `<NEW_EVENT_NAME>` |
-| Producer folder | `main/use_cases/<producer>` |
-| Consumer folder | `main/use_cases/<consumer>` |
-| Payload struct + size | `<payload struct>`, `sizeof(...)` |
-| Consumer inbound `MsgType` | `MSG_<...>` |
-| Consumer emitted `CmdType` | `CMD_<...>` |
-| Emulator trigger | shared input pin, self-publish tick, or `write-serial` |
+| Event name | `EVENT_LED_TOGGLED` |
+| Producer folder | `main/use_cases/toggle-physical-led` |
+| Consumer folder | `main/use_cases/fetch-and-uart` |
+| Payload struct + size | `LedToggledEvent { bool on; }`, `sizeof(LedToggledEvent)` |
+| Payload header | `main/events.h` |
+| Consumer inbound `MsgType` | `MSG_LED_TOGGLED` (added in Stage 2) |
+| Consumer emitted `CmdType` | `CMD_SYNC_NETWORK` (reused; `Cmd` gains `bool led_on`) |
+| Emulator trigger | `btn1` on GPIO0 (already wired in `diagram.json`) |
 | Emulator assertion | `printf` marker + `wait-serial` |
+
+### 2.1 Neutral payloads live in `main/events.h` (design decision)
+
+Cross-feature event payloads go in a dedicated **`main/events.h`**, next to `registry.h`,
+**not** in either feature's `domain.h`. Event ids stay in `registry.h` (`SystemEventId`);
+`events.h` carries only what travels on the bus:
+
+```c
+#ifndef EVENTS_H
+#define EVENTS_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+/* Cross-feature event payloads. Neutral by design: no feature's Msg/Cmd
+ * types appear here, so producer and consumer each include this header and
+ * never reference each other. Event ids live in registry.h (SystemEventId);
+ * this header carries only what travels on the bus. */
+
+typedef struct {
+    bool on;
+} LedToggledEvent;
+
+#endif
+```
+
+Why this is the right home:
+
+- **Solves the size contract.** Both sides include `events.h`, so they publish and
+  subscribe with the *identical* type and `sizeof` — no scratch payload, no size
+  discriminator, no `sizeof` guesswork (`registry.c` skips size-mismatched subscribers).
+- **Preserves rule 2 (no cross-feature includes).** Neither feature names the other's
+  `Msg`/`Cmd`; the neutral payload and the shared `SystemEventId` are the only coupling.
+- **No build edit.** `main/CMakeLists.txt` already has `"."` in `INCLUDE_DIRS`, so a
+  `main/events.h` is found without touching the component file.
+
+This mirrors the Rust twin's neutral `PlatformEvent::LedToggled { on: bool }`
+(`add_rust_cross_feature_event.md` §3.2: "Dedicated neutral payload … rather than reusing
+UC-5's `Msg`").
 
 ---
 
@@ -84,6 +128,8 @@ behavior is unchanged.
 - The event set is one shared enum, `SystemEventId`, in `main/registry.h`. Add the new
   variant **immediately before the `EVENT_ID_COUNT` terminator**; the bounds checks
   (`event >= EVENT_ID_COUNT`) and the `-Wswitch-enum` builds depend on that terminator.
+- The payload set is `main/events.h`: one neutral, self-contained struct per event
+  (§2.1). Producer and consumer include it, so their `sizeof` always matches.
 - `event_bus_subscribe(event, queue, message_size)` records a subscriber and the size of
   the payload it expects. It is called from a module's `wire_subscriptions` during boot.
 - `event_bus_publish(event, message, message_size)` copies the payload **by `memcpy`** to
@@ -98,7 +144,7 @@ behavior is unchanged.
   update(model, msg) -> Cmd   ──▶  process_queue_item(item):
                                      execute_<producer>_hardware(&cmd)
                                      event_bus_publish(NEW_EVENT, &
-                                       payload, sizeof(payload))
+                                       payload, sizeof(payload))     [main/events.h]
                                             │  memcpy (size must match)
                                             ▼
                                      local_process_queue_item(item) ──▶ consumer/logic.c
@@ -131,9 +177,8 @@ Goal: prove `<NEW_EVENT_NAME>` travels from `<producer>` to `<consumer>` and the
 runs on receipt. No semantics yet.
 
 - Add `<NEW_EVENT_NAME>` to `SystemEventId` in `main/registry.h`.
-- Choose the smallest possible payload (start with a fixed, self-contained struct — e.g. a
-  single `bool` or `int` wrapped in a struct). Both sides must use the same type so the
-  `sizeof` matches.
+- Add the neutral payload struct to `main/events.h` (§2.1). Both sides include
+  `events.h`, so the `sizeof` matches without any scratch type or discriminator.
 - Producer: after its command runs, `event_bus_publish(NEW_EVENT, &payload, sizeof(payload))`.
 - Consumer: `event_bus_subscribe(NEW_EVENT, my_queue, sizeof(payload))` and, in
   `process_queue_item`, read the item, log a `printf` marker (e.g. `# <EVENT> RECEIVED`),
@@ -149,9 +194,11 @@ Goal: the consumer's pure core reacts.
 - Consumer `logic.c`: handle the new message; extend `Model`; emit the real `Cmd`. Keep the
   switch exhaustive.
 - Consumer `setup.c`: copy the raw `item` into a `Msg` and call `update`; execute the
-  returned command.
+  returned command. (In Stage 1 the raw `LedToggledEvent` can be handled directly; by
+  Stage 2 the event is folded into the consumer's `Msg` so it routes through `update`.)
 - Producer: if Stage 1's scratch payload was not the real one, give the producer's
   `domain.h` the field needed to carry the state the consumer wants, and publish it.
+  With `main/events.h` (§2.1) the payload is already final, so nothing here changes.
 - Add a native test for the new transition (see §7).
 - Verify by scenario (`wait-serial` for the consumer's observable marker).
 
@@ -177,7 +224,7 @@ Goal: `<producer>` publishes the LED state; `<consumer>` fetches `/?led=on|off`.
 | File | Stage | Change |
 |---|---|---|
 | `main/registry.h` | 1 | add `<NEW_EVENT_NAME>` before `EVENT_ID_COUNT` |
-| `main/use_cases/<producer>/domain.h` | 2/3 | payload field(s) the bus carries |
+| `main/events.h` | 1 | add the neutral `<Payload>` struct (§2.1; new file) |
 | `main/use_cases/<producer>/setup.c` | 1/3 | `event_bus_publish(...)` after the command executes |
 | `main/use_cases/<consumer>/domain.h` | 2 | new `MsgType`, `Model`, `Cmd` |
 | `main/use_cases/<consumer>/logic.c` | 2 | handle the message; exhaustive switch |
@@ -193,14 +240,16 @@ Goal: `<producer>` publishes the LED state; `<consumer>` fetches `/?led=on|off`.
 
 ## 6. Step-by-step (re-runnable)
 
-### 6.1 Add the event
+### 6.1 Add the event + payload
 
 - [ ] In `main/registry.h`, add `<NEW_EVENT_NAME>` to `SystemEventId` **before**
   `EVENT_ID_COUNT`. Do not reorder existing values.
+- [ ] In `main/events.h`, add the neutral payload struct (§2.1). It is a new file the
+  first time; `INCLUDE_DIRS` already has `"."`, so no build edit is needed.
 
 ### 6.2 Producer publishes
 
-- [ ] In `main/use_cases/<producer>/setup.c`, after
+- [ ] In `main/use_cases/<producer>/setup.c`, `#include "events.h"` and, after
   `execute_<producer>_hardware(&result.command)`, publish the state:
   ```c
   <Payload> out = { /* fields */ };
@@ -213,20 +262,24 @@ Goal: `<producer>` publishes the LED state; `<consumer>` fetches `/?led=on|off`.
 
 ### 6.3 Consumer subscribes
 
-- [ ] In `main/use_cases/<consumer>/setup.c`, add
+- [ ] In `main/use_cases/<consumer>/setup.c`, `#include "events.h"` and add
   `event_bus_subscribe(<NEW_EVENT_NAME>, my_queue, sizeof(<Payload>));` in
-  `wire_subscriptions`. The `sizeof` must equal the producer's published size.
+  `wire_subscriptions`. Because both sides use the `events.h` type, the size always equals
+  the producer's published size.
 
 ### 6.4 Consumer handles
 
-- [ ] In `process_queue_item`, copy the raw buffer into your `Msg`:
+- [ ] In `process_queue_item`, in **Stage 1** you may read the raw `events.h` payload
+  directly (`const <Payload> *ev = (const <Payload> *)item;`) and log a marker. By
+  **Stage 2**, fold the event into the consumer's `Msg` so it routes through `update`:
   ```c
   const Msg *msg = (const Msg *)item; /* item is the published payload bytes */
   UpdateResult r = <consumer>_update(local_model, *msg);
   local_model = r.next;
   execute_<consumer>_hardware(&r.command);
   ```
-- [ ] Ensure the consumer's `self_module.message_size == sizeof(Msg) == sizeof(<Payload>)`.
+- [ ] Ensure the consumer's `self_module.message_size` can hold the event and that what
+  you cast `item` to matches the published payload type/size.
 
 ### 6.5 Register (new folder only)
 
@@ -287,12 +340,12 @@ Skip if both folders already exist.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Event published but consumer never runs | `message_size` mismatch: `event_bus_publish` skips subscribers whose declared size differs (`registry.c`) | publish and subscribe with the **same** `sizeof`; check `self_module.message_size` |
+| Event published but consumer never runs | `message_size` mismatch: `event_bus_publish` skips subscribers whose declared size differs (`registry.c`) | both sides include `main/events.h` and use `sizeof(<Payload>)`; check `self_module.message_size` |
 | `Found N-1 Autonomous Modules` | new tag missing from `UC_MODULES`, or sources missing from `SRCS` (new folder only) | apply §6.5 |
 | `-Wswitch-enum`/`-Werror=switch` build error | a `switch` misses an enum value, or a `default:` was added | enumerate all cases; remove `default:` |
 | Build error: FreeRTOS/ESP headers in host test | hardware code not guarded | wrap it in `#ifdef ESP_PLATFORM` |
 | Native test `implicit declaration` / `no member named …` | wrong `domain.h` picked up by include order | order the new dir before `toggle-physical-led`, or use a dedicated `-I` set (§6.6) |
-| Consumer crashes/undefined on payload | read the raw `item` as a larger struct than was published | match the `Msg` to the exact published payload type/size |
+| Consumer crashes/undefined on payload | read the raw `item` as a larger struct than was published | match the cast to the exact `main/events.h` payload type/size |
 | Reentrancy worries | publishing from inside `process_queue_item` | it is safe — the main loop drains queues; **never** call another feature's `execute_*` directly, always publish |
 | Scenario `expect-pin` never matches | output-pin `gpio_change` not reliably emitted | assert with `printf` + `wait-serial` |
 | Second network trigger aborts the chip | (only if the consumer does Wi-Fi) re-running Wi-Fi init | keep init one-shot (`wifi_init_once` in UC-5); out of scope here |
@@ -305,23 +358,46 @@ Skip if both folders already exist.
 
 Parameters: `NEW_EVENT_NAME` = ________  `producer` = ________  `consumer` = ________
 
-- [ ] Stage 1: event id added; producer publishes; consumer subscribes and logs receipt;
-      scenario confirms delivery
+- [ ] Stage 1: event id added to `registry.h`; neutral payload added to `main/events.h`;
+      producer publishes; consumer subscribes and logs receipt; scenario confirms delivery
 - [ ] Stage 2: consumer `MsgType`/`Model`/`Cmd` + logic + exhaustive switch; native test
       passes
 - [ ] Stage 3: producer publishes real state; consumer acts; scenario asserts end-to-end
-- [ ] `main/CMakeLists.txt` updated (new folder only)
+- [ ] `main/CMakeLists.txt` updated (new folder only; `events.h` needs no edit)
 - [ ] `test/Makefile` include order correct; `make native-test` all `PASS`
 - [ ] `make build` 0 warnings; banner `Found N`
 - [ ] `make scenario NAME=<consumer>` `RESULT: PASS`; `make test` green
 - [ ] Docs updated; nothing under `rust/` touched
 - [ ] Re-read §2 (contract) and §8 (failure modes) before finishing
 
+### 9.1 Current run record — LED toggle → fetch (`EVENT_LED_TOGGLED`)
+
+Parameters: `NEW_EVENT_NAME` = `EVENT_LED_TOGGLED`  `producer` = `toggle-physical-led`
+`consumer` = `fetch-and-uart`
+
+| Stage | Deliverable | Status |
+|---|---|---|
+| 1 | `EVENT_LED_TOGGLED` in `registry.h`; `LedToggledEvent` in `main/events.h`; UC-1 publishes; UC-5 subscribes and logs `# EVENT_LED_TOGGLED RECEIVED`; delivery scenario passes | planned |
+| 2 | UC-5 `domain.h`: `MSG_LED_TOGGLED`, `Model.led_on`, `Cmd.led_on`; `logic.c` caches and emits `CMD_SYNC_NETWORK`; native test passes | planned |
+| 3 | UC-5 fetches `/?led=on|off` (one-shot Wi-Fi unchanged); `tests/velxio/scenarios/uc5_led_toggle_fetch.yaml`; `make test` green | planned |
+
+Design notes carried through the run:
+
+- **Payload home:** `main/events.h` (§2.1) — neutral struct, included by both features, so
+  the `sizeof` contract holds and neither feature names the other's `Msg`/`Cmd`.
+- **Stage 1 consumer path:** read the raw `LedToggledEvent` directly and log; fold it into
+  UC-5's `Msg` in Stage 2 so the transition routes through the pure `update`.
+- **NET button unchanged:** `MSG_UART_TX_DONE` keeps emitting `CMD_SYNC_NETWORK`, reusing
+  the cached `led_on` (default `false` → `/?led=off`).
+- **Boundary:** nothing under `rust/` is modified; the Rust twin
+  (`add_rust_cross_feature_event.md`) already implements this behavior.
+
 ---
 
 ## 10. References
 
 - `main/registry.h`, `main/registry.c` — `SystemEventId`, `event_bus_subscribe/publish`.
+- `main/events.h` — neutral cross-feature event payloads (new file this run).
 - `main/main.c` — engine, queues, `process_queue_item` drain.
 - `main/use_cases/toggle-physical-led/` — producer reference (logic/setup/commands).
 - `main/use_cases/fetch-and-uart/` — consumer reference (feedback publish, one-shot Wi-Fi).
