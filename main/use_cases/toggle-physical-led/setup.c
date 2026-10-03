@@ -1,4 +1,5 @@
 #include "domain.h"
+#include "events.h"
 #include "registry.h"
 
 static Model local_model;
@@ -30,6 +31,13 @@ static void local_process_queue_item(const void *item)
     UpdateResult result = toggle_led_update(local_model, *msg);
     local_model = result.next;
     execute_toggle_led_hardware(&result.command);
+    if (result.command.type == CMD_TOGGLE_LED) {
+        LedToggledEvent out = {
+            .tag = EVENT_PAYLOAD_LED_TOGGLED,
+            .on = result.next.led_on,
+        };
+        event_bus_publish(EVENT_LED_TOGGLED, &out, sizeof(out));
+    }
 }
 
 static void local_subscriptions(QueueHandle_t my_queue)

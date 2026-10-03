@@ -22,6 +22,8 @@ UpdateResult fetch_and_uart_update(Model model, Msg msg)
         result.command.type = CMD_SYNC_NETWORK;
         result.next.synced = true;
         break;
+    case MSG_LED_TOGGLED:
+        break;
     }
 
     return result;

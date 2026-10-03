@@ -7,6 +7,7 @@
 typedef enum {
     MSG_DB_QUERY_RESULT_READY = 0,
     MSG_UART_TX_DONE,
+    MSG_LED_TOGGLED,
 } MsgType;
 
 typedef struct {

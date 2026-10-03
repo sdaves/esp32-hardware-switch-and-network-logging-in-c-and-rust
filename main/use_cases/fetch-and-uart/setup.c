@@ -1,4 +1,5 @@
 #include "domain.h"
+#include "events.h"
 #include "registry.h"
 
 static Model local_model;
@@ -26,6 +27,12 @@ static void local_poll_timer_tick(void)
 
 static void local_process_queue_item(const void *item)
 {
+    const Msg *raw = (const Msg *)item;
+    if (raw->type == (MsgType)EVENT_PAYLOAD_LED_TOGGLED) {
+        const LedToggledEvent *ev = (const LedToggledEvent *)item;
+        printf("# EVENT_LED_TOGGLED RECEIVED (on=%d)\n", ev->on ? 1 : 0);
+        return;
+    }
     const Msg *msg = (const Msg *)item;
     UpdateResult result = fetch_and_uart_update(local_model, *msg);
     local_model = result.next;
@@ -41,6 +48,7 @@ static void local_subscriptions(QueueHandle_t my_queue)
     local_queue = my_queue;
     local_model = fetch_and_uart_init();
     event_bus_subscribe(EVENT_DB_QUERY_RESULT, my_queue, sizeof(Msg));
+    event_bus_subscribe(EVENT_LED_TOGGLED, my_queue, sizeof(LedToggledEvent));
 }
 
 static const UseCaseModule self_module = {

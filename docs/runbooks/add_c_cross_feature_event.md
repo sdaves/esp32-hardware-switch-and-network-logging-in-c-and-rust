@@ -75,7 +75,7 @@ next run.
 | Event name | `EVENT_LED_TOGGLED` |
 | Producer folder | `main/use_cases/toggle-physical-led` |
 | Consumer folder | `main/use_cases/fetch-and-uart` |
-| Payload struct + size | `LedToggledEvent { bool on; }`, `sizeof(LedToggledEvent)` |
+| Payload struct + size | `LedToggledEvent { EventPayloadTag tag; bool on; }`, `sizeof(LedToggledEvent)` (8 bytes) |
 | Payload header | `main/events.h` |
 | Consumer inbound `MsgType` | `MSG_LED_TOGGLED` (added in Stage 2) |
 | Consumer emitted `CmdType` | `CMD_SYNC_NETWORK` (reused; `Cmd` gains `bool led_on`) |
@@ -100,7 +100,17 @@ Cross-feature event payloads go in a dedicated **`main/events.h`**, next to `reg
  * never reference each other. Event ids live in registry.h (SystemEventId);
  * this header carries only what travels on the bus. */
 
+/* Self-describing payload tag. A subscriber may receive payloads for several
+ * events on one queue, so each neutral payload starts with a tag drawn from
+ * this shared vocabulary rather than a feature's own enum. Values start well
+ * above any feature's own MsgType range so a raw field can be discriminated
+ * safely. */
+typedef enum {
+    EVENT_PAYLOAD_LED_TOGGLED = 0x100,
+} EventPayloadTag;
+
 typedef struct {
+    EventPayloadTag tag;
     bool on;
 } LedToggledEvent;
 
@@ -112,6 +122,10 @@ Why this is the right home:
 - **Solves the size contract.** Both sides include `events.h`, so they publish and
   subscribe with the *identical* type and `sizeof` — no scratch payload, no size
   discriminator, no `sizeof` guesswork (`registry.c` skips size-mismatched subscribers).
+- **Self-describing.** The bus delivers payload bytes only (no event id), so a queue shared
+  by several events needs an in-payload tag. The leading `EventPayloadTag` provides it; the
+  struct is sized/aligned so the tag aliases the consumer's `MsgType` at offset 0 and the
+  data field aliases its next field (see §9.1).
 - **Preserves rule 2 (no cross-feature includes).** Neither feature names the other's
   `Msg`/`Cmd`; the neutral payload and the shared `SystemEventId` are the only coupling.
 - **No build edit.** `main/CMakeLists.txt` already has `"."` in `INCLUDE_DIRS`, so a
@@ -377,7 +391,7 @@ Parameters: `NEW_EVENT_NAME` = `EVENT_LED_TOGGLED`  `producer` = `toggle-physica
 
 | Stage | Deliverable | Status |
 |---|---|---|
-| 1 | `EVENT_LED_TOGGLED` in `registry.h`; `LedToggledEvent` in `main/events.h`; UC-1 publishes; UC-5 subscribes and logs `# EVENT_LED_TOGGLED RECEIVED`; delivery scenario passes | planned |
+| 1 | `EVENT_LED_TOGGLED` in `registry.h`; `LedToggledEvent` in `main/events.h`; UC-1 publishes; UC-5 subscribes and logs `# EVENT_LED_TOGGLED RECEIVED (on=…)`; delivery scenario passes | **done** |
 | 2 | UC-5 `domain.h`: `MSG_LED_TOGGLED`, `Model.led_on`, `Cmd.led_on`; `logic.c` caches and emits `CMD_SYNC_NETWORK`; native test passes | planned |
 | 3 | UC-5 fetches `/?led=on|off` (one-shot Wi-Fi unchanged); `tests/velxio/scenarios/uc5_led_toggle_fetch.yaml`; `make test` green | planned |
 
@@ -385,12 +399,80 @@ Design notes carried through the run:
 
 - **Payload home:** `main/events.h` (§2.1) — neutral struct, included by both features, so
   the `sizeof` contract holds and neither feature names the other's `Msg`/`Cmd`.
-- **Stage 1 consumer path:** read the raw `LedToggledEvent` directly and log; fold it into
-  UC-5's `Msg` in Stage 2 so the transition routes through the pure `update`.
+- **Self-describing payload tag (learned in Stage 1).** `registry.c` matches published and
+  declared sizes exactly, but a queue delivers `self_module.message_size` bytes to
+  `process_queue_item` — the bus does **not** pass the event id. A consumer that receives
+  more than one event on one queue therefore needs a discriminator *inside* the payload.
+  `main/events.h` gives every payload a leading `EventPayloadTag tag` (offset 0), sized and
+  aligned so it aliases the consumer's own `MsgType` field. Values start at `0x100` so a
+  raw agent tag can never collide with a feature's `MsgType` range. `LedToggledEvent` is
+  `{ EventPayloadTag tag; bool on; }` = 8 bytes, byte-identical in size and field offsets to
+  UC-5's `Msg` (`int type; bool success;` = 8 bytes: tag/type at 0, on/success at 4).
+- **Stage 1 consumer path:** read the raw `LedToggledEvent` directly and log (the
+  `tag == EVENT_PAYLOAD_LED_TOGGLED` branch); fold it into UC-5's `Msg` in Stage 2 so the
+  transition routes through the pure `update`.
 - **NET button unchanged:** `MSG_UART_TX_DONE` keeps emitting `CMD_SYNC_NETWORK`, reusing
   the cached `led_on` (default `false` → `/?led=off`).
 - **Boundary:** nothing under `rust/` is modified; the Rust twin
   (`add_rust_cross_feature_event.md`) already implements this behavior.
+
+### 9.2 Stage 2 — concrete plan (UC-5 reacts through the pure core)
+
+- `main/use_cases/fetch-and-uart/domain.h`: add `bool led_on;` to `Msg` (folds the event
+  payload in), `bool led_on;` to `Model` (cached state), and `bool led_on;` to `Cmd` (carries
+  the path decision to the shell). `MSG_LED_TOGGLED` already exists (added in Stage 1).
+- `main/use_cases/fetch-and-uart/logic.c`:
+  - `MSG_LED_TOGGLED` → `next.led_on = msg.led_on`; emit `CMD_SYNC_NETWORK` with
+    `command.led_on = msg.led_on`.
+  - `MSG_UART_TX_DONE` (NET button) → emit `CMD_SYNC_NETWORK` with
+    `command.led_on = model.led_on`.
+  - Enumerate every case; no `default:`.
+- `main/use_cases/fetch-and-uart/setup.c`: replace the Stage-1 log-and-return with an
+  explicit conversion into the pure path:
+  ```c
+  const LedToggledEvent *ev = (const LedToggledEvent *)item;
+  Msg msg = { .type = MSG_LED_TOGGLED, .led_on = ev->on };
+  UpdateResult result = fetch_and_uart_update(local_model, msg);
+  local_model = result.next;
+  execute_fetch_and_uart_hardware(&result.command);
+  ```
+  `self_module.message_size` stays `sizeof(Msg)`; the `EVENT_LED_TOGGLED` subscription
+  declares `sizeof(LedToggledEvent)` (already offset-compatible).
+- `test/test_fetch_and_uart.c`: assert `MSG_LED_TOGGLED {on=true}` →
+  `CMD_SYNC_NETWORK {led_on=true}` and `next.led_on=true`; `{on=false}` → `led_on=false`;
+  `MSG_UART_TX_DONE` reuses the cached value (default false, true after an `on` event).
+
+### 9.3 Stage 3 — concrete plan (fetch `/?led=on|off`)
+
+- `main/use_cases/fetch-and-uart/commands.c`: derive the path from `command->led_on`
+  (`"/?led=on"` / `"/?led=off"`), prefix `http://192.168.4.2:8000`, and pass the full URL
+  into `http_get_sample()`. Print `# HTTP GET /?led=on` / `# HTTP GET /?led=off` as the
+  observable marker alongside the existing `-> status N` line. **Do not change**
+  `wifi_init_once` (one-shot Wi-Fi) or the network stack.
+- `tests/velxio/scenarios/uc5_led_toggle_fetch.yaml` (replaces the Stage-1 delivery
+  version): BOOT press → `# LED ON` → `# HTTP GET /?led=on` → `-> status 200`; press again
+  → `# LED OFF` → `# HTTP GET /?led=off` → `-> status 200`. ≥400 ms hold/release margins;
+  assert only via `printf` + `wait-serial`.
+- `tests/velxio/scenarios/fetch_and_uart.yaml`: add `# HTTP GET /?led=off` (NET button with
+  cached default `led_on=false`).
+- `README.md` §Status (and `AGENTS.md` §2 only if intent text changes): note the wiring.
+
+### 9.4 Environment gotchas learned during this run
+
+- **Boot before deploying.** The Velxio container installs `gcc make libc6-dev` and the
+  Python deps, installs the Arduino cores, and provisions IDF **before** nginx/uvicorn
+  start. Requesting a scenario during that window gives `[Velxio] WebSocket error` /
+  `Connect call failed`. Wait for `curl <container>/health` → `200` (inside the container,
+  `curl http://localhost/health`) before running scenarios or `make test`.
+- **Proxy upstream race.** `scripts/dev-http-server.py` waits `VELXIO_PROXY_TIMEOUT`
+  (default 5 s) on `VELXIO_PROXY_UPSTREAM` before returning the 200 stub; UC-5's HTTP client
+  times out at 5 s, so an unreachable parent can make the guest report `status -1` before
+  the stub is written. Either run a real server on the parent's `:8000`, or set
+  `VELXIO_PROXY_TIMEOUT` low (e.g. `0.5`) so the fallback beats the client timeout.
+- **Stale proxy.** `./scripts/dev-http-server.sh stop` then `start` after a container
+  restart; a process can survive and hold `:8000` while the pidfile is gone.
+- **Full-suite check.** `make test` runs every scenario in filename order; the Stage-1
+  `uc5_led_toggle_fetch.yaml` must pass on its own before Stage 3 rewrites it.
 
 ---
 
