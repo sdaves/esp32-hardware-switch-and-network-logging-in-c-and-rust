@@ -24,8 +24,14 @@ distillation.
 |---|---|---|
 | 0 | toolchain + hello-world + Wi-Fi spikes | **done** (2026-10-02) |
 | 1 | `tea-core` + `tea-platform` + `firmware` + `host`, UC-1 | **done** (2026-10-02) |
-| 2 | UC-2..UC-5 parity, emulator scenarios | next |
+| 2 | UC-2..UC-5 parity, emulator scenarios | **in progress** — UC-5 real (Wi-Fi + HTTP + LED-state query), UC-2..UC-4 logic-only |
 | 3 | iced dashboard (`ui`, native + wasm) | pending |
+
+UC-5 status: the NET button runs UART → Wi-Fi (up to 3 attempts at boot) → HTTP
+GET, and UC-1's LED toggle now publishes a `LedToggled` event that makes UC-5
+fetch `/?led=on|off` with the new state. No request is sent at boot; Wi-Fi is
+brought up once at boot and reused. Scenarios: `uc1_button_toggle`,
+`uc5_fetch_and_uart`, `uc5_led_toggle_fetch`.
 
 Goal: one pure Rust TEA core (`tea-core`) shared by every shell, one std
 `esp-idf-svc` firmware that boots on the emulated ESP32 and reaches parity with

@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::time::Duration;
 
 use esp_idf_svc::sys;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
@@ -11,7 +12,10 @@ use tea_platform::{PlatformEvent, PlatformModule, SystemEventId};
 const BUTTON_GPIO: sys::gpio_num_t = 4;
 const SSID: &str = "Espressif";
 const URL_HOST: &str = "192.168.4.2:8000";
-const URL_PATH: &str = "/";
+
+// Bring-up retries (the emulated radio can be slow to associate).
+const WIFI_MAX_ATTEMPTS: u32 = 3;
+const WIFI_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 pub struct FetchAndUart {
     model: fetch_and_uart::Model,
@@ -22,6 +26,7 @@ pub struct FetchAndUart {
     // `esp_netif_create_default_wifi_sta` (or dropping/re-taking the ESP-IDF
     // singletons) fails with ESP_ERR_INVALID_STATE and resets the chip.
     wifi: Option<BlockingWifi<EspWifi<'static>>>,
+    wifi_ready: bool,
 }
 
 impl FetchAndUart {
@@ -31,43 +36,91 @@ impl FetchAndUart {
             last_level: 1,
             armed: true,
             wifi: None,
+            wifi_ready: false,
         }
     }
 
-    /// First call brings up Wi-Fi and holds the handle; later calls reuse it.
-    fn wifi_once(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.wifi.is_some() {
-            return Ok(());
+    /// Bring up Wi-Fi once, retrying the association a few times on failure.
+    /// Later calls are a no-op; the handle lives for the life of the module.
+    fn wifi_with_retry(&mut self) {
+        if self.wifi_ready {
+            return;
         }
 
         // The modem peripheral must outlive the stored `EspWifi<'static>`.
         // Leak the owned `Peripherals` once, mirroring the C file-static
         // singletons (`esp_netif_create_default_wifi_sta` is a one-shot).
         let peripherals: &'static mut esp_idf_svc::hal::peripherals::Peripherals =
-            Box::leak(Box::new(esp_idf_svc::hal::peripherals::Peripherals::take()?));
-        let sys_loop = esp_idf_svc::eventloop::EspSystemEventLoop::take()?;
-        let nvs = esp_idf_svc::nvs::EspDefaultNvsPartition::take()?;
+            match esp_idf_svc::hal::peripherals::Peripherals::take() {
+                Ok(p) => Box::leak(Box::new(p)),
+                Err(err) => {
+                    log::error!("# WIFI SPIKE FAILED: {err:?}");
+                    return;
+                }
+            };
 
-        let mut wifi = BlockingWifi::wrap(
-            EspWifi::new(&mut peripherals.modem, sys_loop.clone(), Some(nvs))?,
-            sys_loop,
-        )?;
+        let sys_loop = match esp_idf_svc::eventloop::EspSystemEventLoop::take() {
+            Ok(s) => s,
+            Err(err) => {
+                log::error!("# WIFI SPIKE FAILED: {err:?}");
+                return;
+            }
+        };
+        let nvs = match esp_idf_svc::nvs::EspDefaultNvsPartition::take() {
+            Ok(n) => n,
+            Err(err) => {
+                log::error!("# WIFI SPIKE FAILED: {err:?}");
+                return;
+            }
+        };
 
-        wifi.set_configuration(&Configuration::Client(ClientConfiguration {
+        // Build the Wi-Fi driver once; retry only the association.
+        let esp_wifi = match EspWifi::new(&mut peripherals.modem, sys_loop.clone(), Some(nvs)) {
+            Ok(w) => w,
+            Err(err) => {
+                log::error!("# WIFI SPIKE FAILED: {err:?}");
+                return;
+            }
+        };
+        let mut wifi = match BlockingWifi::wrap(esp_wifi, sys_loop) {
+            Ok(w) => w,
+            Err(err) => {
+                log::error!("# WIFI SPIKE FAILED: {err:?}");
+                return;
+            }
+        };
+
+        let config = Configuration::Client(ClientConfiguration {
             ssid: SSID.try_into().unwrap(),
             bssid: None,
             auth_method: AuthMethod::None,
             password: "".try_into().unwrap(),
             channel: None,
-        }))?;
+        });
 
-        wifi.start()?;
-        wifi.connect()?;
-        wifi.wait_netif_up()?;
-        log::info!("# WIFI CONNECTED ({SSID})");
-
-        self.wifi = Some(wifi);
-        Ok(())
+        for attempt in 1..=WIFI_MAX_ATTEMPTS {
+            let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                wifi.set_configuration(&config)?;
+                wifi.start()?;
+                wifi.connect()?;
+                wifi.wait_netif_up()?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    log::info!("# WIFI CONNECTED ({SSID}, attempt {attempt})");
+                    self.wifi = Some(wifi);
+                    self.wifi_ready = true;
+                    return;
+                }
+                Err(err) => {
+                    log::error!("# WIFI ATTEMPT {attempt}/{WIFI_MAX_ATTEMPTS} FAILED: {err:?}");
+                    let _ = wifi.stop();
+                    std::thread::sleep(WIFI_RETRY_DELAY);
+                }
+            }
+        }
+        log::error!("# WIFI SPIKE FAILED after {WIFI_MAX_ATTEMPTS} attempts");
     }
 
     fn button_pressed(&self) -> bool {
@@ -84,16 +137,24 @@ impl FetchAndUart {
                 println!("# UART SENT");
                 Some(PlatformEvent::DbQueryResult(Msg::UartTxDone))
             }
-            Cmd::SyncNetwork => {
-                // One-shot Wi-Fi bring-up, then an HTTP GET on every press.
-                if let Err(err) = self.wifi_once() {
-                    log::error!("# WIFI SPIKE FAILED: {err:?}");
-                } else if let Err(err) = http_get() {
-                    log::error!("# HTTP GET FAILED: {err:?}");
-                }
-                println!("# NETWORK SYNCED");
+            Cmd::SyncNetwork { led_on } => {
+                self.fetch(*led_on);
                 None
             }
+        }
+    }
+
+    /// Fetch `/?led=on|off`; Wi-Fi is brought up on the first request (retried).
+    fn fetch(&mut self, led_on: bool) {
+        self.wifi_with_retry();
+        if !self.wifi_ready {
+            log::error!("# WIFI SPIKE FAILED: skipping request");
+            return;
+        }
+        let path = if led_on { "/?led=on" } else { "/?led=off" };
+        match http_get(path) {
+            Ok(()) => {}
+            Err(err) => log::error!("# HTTP GET FAILED: {err:?}"),
         }
     }
 }
@@ -104,7 +165,7 @@ impl PlatformModule for FetchAndUart {
     }
 
     fn subscriptions(&self) -> &'static [SystemEventId] {
-        &[SystemEventId::DbQueryResult]
+        &[SystemEventId::DbQueryResult, SystemEventId::LedToggled]
     }
 
     fn init_hardware(&mut self) {
@@ -117,6 +178,10 @@ impl PlatformModule for FetchAndUart {
             cfg.intr_type = sys::gpio_int_type_t_GPIO_INTR_DISABLE;
             sys::gpio_config(&cfg);
         }
+        // Wi-Fi comes up at boot so triggered fetches are immediate; no
+        // request is sent until an event. (Starting it in `process` would
+        // stall the poll loop and drop button edges during association.)
+        self.wifi_with_retry();
     }
 
     fn poll_timer_tick(&mut self) -> Option<PlatformEvent> {
@@ -137,33 +202,45 @@ impl PlatformModule for FetchAndUart {
     }
 
     fn process(&mut self, event: &PlatformEvent) -> Option<PlatformEvent> {
-        let PlatformEvent::DbQueryResult(msg) = event else {
-            return None;
-        };
-        let result = fetch_and_uart::update(self.model, *msg);
-        self.model = result.next;
-        self.execute(&result.command)
+        match event {
+            PlatformEvent::DbQueryResult(msg) => {
+                let result = fetch_and_uart::update(self.model, *msg);
+                self.model = result.next;
+                self.execute(&result.command)
+            }
+            PlatformEvent::LedToggled { on } => {
+                let result = fetch_and_uart::update(self.model, Msg::LedToggled { on: *on });
+                self.model = result.next;
+                self.execute(&result.command)
+            }
+            // Other events are not subscribed here; ignore defensively.
+            PlatformEvent::HardwareAlert(_)
+            | PlatformEvent::SensorReading(_)
+            | PlatformEvent::HttpResponse(_)
+            | PlatformEvent::DbRow(_) => None,
+        }
     }
 }
 
-// HTTP GET against the slirp gateway. Wi-Fi is already up (held by the module).
-fn http_get() -> Result<(), Box<dyn std::error::Error>> {
+/// HTTP GET of `path` against the slirp gateway. Wi-Fi is already up.
+fn http_get(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect(URL_HOST)?;
     write!(
         stream,
-        "GET {URL_PATH} HTTP/1.1\r\nHost: {URL_HOST}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {URL_HOST}\r\nConnection: close\r\n\r\n"
     )?;
 
     let mut buf = [0u8; 1024];
     let n = stream.read(&mut buf)?;
     let response = String::from_utf8_lossy(&buf[..n]);
-    let mut lines = response.lines();
-    if let Some(status_line) = lines.next() {
-        let code = status_line.split_whitespace().nth(1).unwrap_or("?");
-        log::info!("-> status {code}");
-    }
-    let body: String = lines.collect::<Vec<_>>().join("\n");
-    log::info!("# HTTP BODY {body}");
+    let status = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("?");
+
+    log::info!("# HTTP GET {path}");
+    log::info!("-> status {status}");
 
     Ok(())
 }

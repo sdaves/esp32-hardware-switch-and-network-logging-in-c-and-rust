@@ -1,4 +1,4 @@
-name: UC-1 button toggles the LED (Rust)
+name: UC-1 button toggles LED and triggers the LED-state fetch (Rust)
 version: 1
 steps:
   - wait-serial: "Platform Engine Initializing: Found 5 Autonomous Modules."
@@ -8,9 +8,12 @@ steps:
   - delay: 200ms
   - set-control: { part-id: btn1, control: pressed, value: 0 }
   - delay: 250ms
-  - wait-serial: "# LED ON"
+  - wait-serial: "# LED ON (gpio 2)"
+  - wait-serial: "# HTTP GET /?led=on"
+  - wait-serial: "-> status 200"
   - set-control: { part-id: btn1, control: pressed, value: 1 }
   - delay: 200ms
   - set-control: { part-id: btn1, control: pressed, value: 0 }
   - delay: 250ms
-  - wait-serial: "# LED OFF"
+  - wait-serial: "# LED OFF (gpio 2)"
+  - wait-serial: "# HTTP GET /?led=off"

@@ -91,6 +91,12 @@ impl PlatformModule for TogglePhysicalLed {
         let result = toggle_physical_led::update(self.model, *msg);
         self.model = result.next;
         self.execute(&result.command);
-        None
+
+        // Announce the new LED state on the bus so other features (UC-5) can
+        // react without referencing this module directly.
+        match result.command {
+            Cmd::ToggleLed { level, .. } => Some(PlatformEvent::LedToggled { on: level != 0 }),
+            Cmd::None => None,
+        }
     }
 }

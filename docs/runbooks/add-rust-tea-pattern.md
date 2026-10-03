@@ -1,6 +1,6 @@
 # Runbook: Port the TEA platform to Rust (tea-core / tea-platform / firmware / host)
 
-Status: **executed — Phase 1 done (2026-10-02)**. See the completion log below.
+Status: **executed — Phase 1 done (2026-10-02); Phase 2 UC-5 LED-query increment (2026-10-03)**. See the completion log below.
 Audience: firmware maintainers and coding agents
 Scope: stand up the Rust "Functional Core, Imperative Shell" platform — one pure
 use-case folder per UC in `tea-core`, a typed event bus + module registry in
@@ -59,6 +59,23 @@ Also corrected during execution: UC-5 in the C tree *does* have a producer for
 `EVENT_DB_QUERY_RESULT` (`fetch-and-uart/setup.c` polls GPIO4 and publishes it),
 contrary to §7.4's note. Phase 1 still keeps UC-5 as a logic-only stub; that
 producer moves in Phase 2.
+
+### Phase 2 increment — UC-5 LED-state query (2026-10-03)
+
+- A new `SystemEventId::LedToggled` + neutral `PlatformEvent::LedToggled { on }`
+  carry UC-1's LED state across the bus (no cross-feature import).
+- `fetch_and_uart` core gained `Msg::LedToggled { on }`, `Model.led_on`, and
+  `Cmd::SyncNetwork { led_on }`; unit tests cover the toggle and cached-state
+  paths. Host test `tests/led_toggle_network.rs` verifies routing + command.
+- Firmware: UC-1 returns `LedToggled { on }` from `process` after executing
+  `Cmd::ToggleLed`; UC-5 subscribes to both `DbQueryResult` and `LedToggled`,
+  caches `led_on`, and fetches `/?led=on|off`.
+- Wi-Fi is brought up **once at boot, retried up to 3 times** (~500 ms apart);
+  no request is sent until an event. Bringing it up in `init_hardware` (before
+  the poll loop) keeps triggered fetches fast and avoids dropping button edges.
+- Emulator note: the boot-time Wi-Fi bring-up means scenarios must wait for
+  `# MODULE READY (fetch-and-uart)` (plus a short settle delay) before pressing,
+  because the poll loop only starts after all `init_hardware` calls return.
 
 ### Locked decisions (from the design review)
 

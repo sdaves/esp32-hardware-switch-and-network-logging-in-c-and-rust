@@ -22,6 +22,7 @@ pub enum SystemEventId {
     HttpResponseReceived,
     DbRowReady,
     DbQueryResult,
+    LedToggled,
 }
 
 /// A typed bus payload. Replaces the C `memcpy` + declared message size: a
@@ -33,6 +34,7 @@ pub enum PlatformEvent {
     HttpResponse(fetch_and_save::Msg),
     DbRow(read_and_insert::Msg),
     DbQueryResult(fetch_and_uart::Msg),
+    LedToggled { on: bool },
 }
 
 impl PlatformEvent {
@@ -43,6 +45,7 @@ impl PlatformEvent {
             PlatformEvent::HttpResponse(_) => SystemEventId::HttpResponseReceived,
             PlatformEvent::DbRow(_) => SystemEventId::DbRowReady,
             PlatformEvent::DbQueryResult(_) => SystemEventId::DbQueryResult,
+            PlatformEvent::LedToggled { .. } => SystemEventId::LedToggled,
         }
     }
 }

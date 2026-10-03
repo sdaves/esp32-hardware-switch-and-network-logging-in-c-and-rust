@@ -17,9 +17,13 @@ cargo test
 echo "== firmware: build"
 ./scripts/build.sh
 
-echo "== emulator: uc1_button_toggle"
-( cd "$REPO_ROOT" && python3 -m tests.velxio.runner.run_scenario \
-    --server "$VELXIO_WS" \
-    --firmware rust/dist/firmware.merged.bin \
-    --diagram tests/velxio/diagram.json \
-    --scenario rust/scenarios/uc1_button_toggle.yaml )
+echo "== emulator: rust scenarios"
+for scenario in scenarios/*.yaml; do
+  name="$(basename "$scenario" .yaml)"
+  echo "-- $name"
+  ( cd "$REPO_ROOT" && python3 -m tests.velxio.runner.run_scenario \
+      --server "$VELXIO_WS" \
+      --firmware rust/dist/firmware.merged.bin \
+      --diagram tests/velxio/diagram.json \
+      --scenario "rust/$scenario" )
+done
