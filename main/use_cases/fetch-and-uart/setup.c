@@ -28,17 +28,18 @@ static void local_poll_timer_tick(void)
 static void local_process_queue_item(const void *item)
 {
     const Msg *raw = (const Msg *)item;
+    Msg msg;
     if (raw->type == (MsgType)EVENT_PAYLOAD_LED_TOGGLED) {
         const LedToggledEvent *ev = (const LedToggledEvent *)item;
-        printf("# EVENT_LED_TOGGLED RECEIVED (on=%d)\n", ev->on ? 1 : 0);
-        return;
+        msg = (Msg){ .type = MSG_LED_TOGGLED, .success = false, .led_on = ev->on };
+    } else {
+        msg = *raw;
     }
-    const Msg *msg = (const Msg *)item;
-    UpdateResult result = fetch_and_uart_update(local_model, *msg);
+    UpdateResult result = fetch_and_uart_update(local_model, msg);
     local_model = result.next;
     execute_fetch_and_uart_hardware(&result.command);
     if (result.command.type == CMD_SEND_UART) {
-        Msg done = { .type = MSG_UART_TX_DONE };
+        Msg done = { .type = MSG_UART_TX_DONE, .success = false, .led_on = local_model.led_on };
         event_bus_publish(EVENT_DB_QUERY_RESULT, &done, sizeof(Msg));
     }
 }

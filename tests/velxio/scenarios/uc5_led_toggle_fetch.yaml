@@ -1,4 +1,4 @@
-name: Stage 1 - UC-1 LED toggle event is received by UC-5
+name: UC-1 LED toggle drives UC-5 to fetch /?led=on|off
 version: 1
 steps:
   - wait-serial: "Platform Engine Initializing"
@@ -7,10 +7,12 @@ steps:
   - set-control: { part-id: btn1, control: pressed, value: 0 }
   - delay: 400ms
   - wait-serial: "# LED ON"
-  - wait-serial: "# EVENT_LED_TOGGLED RECEIVED (on=1)"
+  - wait-serial: "# HTTP GET /?led=on"
+  - wait-serial: "-> status 200"
   - set-control: { part-id: btn1, control: pressed, value: 1 }
   - delay: 400ms
   - set-control: { part-id: btn1, control: pressed, value: 0 }
   - delay: 400ms
   - wait-serial: "# LED OFF"
-  - wait-serial: "# EVENT_LED_TOGGLED RECEIVED (on=0)"
+  - wait-serial: "# HTTP GET /?led=off"
+  - wait-serial: "-> status 200"

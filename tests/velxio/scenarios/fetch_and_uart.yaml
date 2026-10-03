@@ -8,6 +8,7 @@ steps:
   - delay: 400ms
   - wait-serial: "# UART SENT"
   - wait-serial: "# WIFI CONNECTED"
+  - wait-serial: "# HTTP GET /?led=off"
   - wait-serial: "-> status 200"
   - wait-serial: "# HTTP BODY"
   - wait-serial: "# NETWORK SYNCED"

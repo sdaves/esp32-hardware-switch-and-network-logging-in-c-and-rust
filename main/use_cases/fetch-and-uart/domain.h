@@ -13,6 +13,7 @@ typedef enum {
 typedef struct {
     MsgType type;
     bool success;
+    bool led_on;
 } Msg;
 
 typedef enum {
@@ -23,10 +24,12 @@ typedef enum {
 
 typedef struct {
     CmdType type;
+    bool led_on;
 } Cmd;
 
 typedef struct {
     bool synced;
+    bool led_on;
 } Model;
 
 typedef struct {

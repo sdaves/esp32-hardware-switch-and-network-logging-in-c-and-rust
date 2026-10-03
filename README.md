@@ -262,11 +262,12 @@ because it is the only board whose emulated QEMU machine has a Wi-Fi radio.
 - Open the **Serial Monitor** at **115200** baud. The boot log should read
   `Platform Engine Initializing: Found 5 Autonomous Modules.`
 - Press **BOOT** (on-screen `btn1`): toggles the LED — `# LED ON (gpio 2)` /
-  `# LED OFF (gpio 2)`.
+  `# LED OFF (gpio 2)`. Each toggle also publishes `EVENT_LED_TOGGLED`, so UC-5
+  additionally fetches `# HTTP GET /?led=on` / `# HTTP GET /?led=off`.
 - Press **NET** (on-screen `btn2`): UC-5 joins the emulated `Espressif` AP and
   fetches over the network. The monitor prints `# UART SENT`,
-  `# WIFI CONNECTED (Espressif)`, `# HTTP GET … -> status 200`, the response
-  body, then `# NETWORK SYNCED`.
+  `# WIFI CONNECTED (Espressif)`, `# HTTP GET /?led=off` (the cached LED state),
+  `-> status 200`, the response body, then `# NETWORK SYNCED`.
 
 ### Notes
 
@@ -302,6 +303,11 @@ because it is the only board whose emulated QEMU machine has a Wi-Fi radio.
   triggers the chain, which sends over UART, joins the emulated Wi-Fi AP, does a
   real HTTP GET, and syncs the network. Validated natively and in the emulator
   (`make scenario NAME=fetch_and_uart`).
+- **Cross-feature event (UC-1 → UC-5).** Toggling the LED on the BOOT button
+  publishes `EVENT_LED_TOGGLED` (neutral payload in `main/events.h`); UC-5
+  subscribes and fetches `/?led=on` when the LED is on and `/?led=off` when off,
+  without either feature including the other. Validated by
+  `make scenario NAME=uc5_led_toggle_fetch`.
 - The remaining use-case plugins (`read-analog-sensor`, `fetch-and-save`,
   `read-and-insert`) exist and compile but their `commands.c` implementations
   are stubs.

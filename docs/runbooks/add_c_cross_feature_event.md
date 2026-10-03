@@ -1,6 +1,6 @@
 # Runbook: Add a C cross-feature, event-driven behavior
 
-Status: planned — current run is recorded in §9.1 (`EVENT_LED_TOGGLED`, UC-1 → UC-5)
+Status: executed (2026-10-03) — reusable template. Current run recorded in §9.1.
 Audience: firmware maintainers and coding agents
 Scope: wire one use case to **react to another use case's state through the C event
 bus**, with no cross-feature `#include`. Parameterized by a `NEW_EVENT_NAME` and the
@@ -392,8 +392,8 @@ Parameters: `NEW_EVENT_NAME` = `EVENT_LED_TOGGLED`  `producer` = `toggle-physica
 | Stage | Deliverable | Status |
 |---|---|---|
 | 1 | `EVENT_LED_TOGGLED` in `registry.h`; `LedToggledEvent` in `main/events.h`; UC-1 publishes; UC-5 subscribes and logs `# EVENT_LED_TOGGLED RECEIVED (on=…)`; delivery scenario passes | **done** |
-| 2 | UC-5 `domain.h`: `MSG_LED_TOGGLED`, `Model.led_on`, `Cmd.led_on`; `logic.c` caches and emits `CMD_SYNC_NETWORK`; native test passes | planned |
-| 3 | UC-5 fetches `/?led=on|off` (one-shot Wi-Fi unchanged); `tests/velxio/scenarios/uc5_led_toggle_fetch.yaml`; `make test` green | planned |
+| 2 | UC-5 `domain.h`: `MSG_LED_TOGGLED`, `Model.led_on`, `Cmd.led_on`; `logic.c` caches and emits `CMD_SYNC_NETWORK`; native test passes | **done** |
+| 3 | UC-5 fetches `/?led=on|off` (one-shot Wi-Fi unchanged); `tests/velxio/scenarios/uc5_led_toggle_fetch.yaml`; `make test` green | **done** |
 
 Design notes carried through the run:
 
@@ -473,6 +473,91 @@ Design notes carried through the run:
   restart; a process can survive and hold `:8000` while the pidfile is gone.
 - **Full-suite check.** `make test` runs every scenario in filename order; the Stage-1
   `uc5_led_toggle_fetch.yaml` must pass on its own before Stage 3 rewrites it.
+
+### 9.5 As executed — what we actually did (tips for future runs)
+
+This is the faithful record of the `EVENT_LED_TOGGLED` → UC-5 `/?led=on|off` run.
+Copy it as a template; the plan in §9.2/§9.3 is what the code ended up matching.
+
+**Order that worked (keep the tree green between stages):**
+
+1. Stage 1 (delivery): add `EVENT_LED_TOGGLED` to `registry.h`; add
+   `LedToggledEvent` to `main/events.h`; publish from UC-1 `setup.c` after
+   `execute_toggle_led_hardware`; subscribe + log from UC-5 `setup.c`; add a scenario
+   and confirm `# EVENT_LED_TOGGLED RECEIVED` before touching semantics.
+2. Stage 2 (semantics): add `bool led_on` to UC-5 `Msg`, `Model`, and `Cmd`; handle
+   `MSG_LED_TOGGLED` in `logic.c`; route the raw event through `update` in `setup.c`;
+   extend `test_fetch_and_uart.c`; run `make native-test`.
+3. Stage 3 (end-to-end): build the path in `commands.c` from `command->led_on`; rewrite
+   the scenario to assert `# HTTP GET /?led=on|off` + `-> status 200`; update
+   `fetch_and_uart.yaml`; `make build` + `make test`.
+
+**Exact shapes that worked (reuse verbatim):**
+
+- `main/events.h` payload (8 bytes, aliases the consumer `Msg` field-for-field):
+  ```c
+  typedef enum { EVENT_PAYLOAD_LED_TOGGLED = 0x100 } EventPayloadTag;
+  typedef struct { EventPayloadTag tag; bool on; } LedToggledEvent;
+  ```
+  `0x100` start avoids collision with any feature `MsgType` (0,1,2,…).
+- Producer publish (build from `result.next`, never re-read hardware):
+  ```c
+  if (result.command.type == CMD_TOGGLE_LED) {
+      LedToggledEvent out = { .tag = EVENT_PAYLOAD_LED_TOGGLED, .on = result.next.led_on };
+      event_bus_publish(EVENT_LED_TOGGLED, &out, sizeof(out));
+  }
+  ```
+- Consumer subscribe with the `events.h` type (same `sizeof` as publish):
+  ```c
+  event_bus_subscribe(EVENT_LED_TOGGLED, my_queue, sizeof(LedToggledEvent));
+  ```
+- Consumer handle: discriminate on the raw tag, convert, and run the pure path:
+  ```c
+  const Msg *raw = (const Msg *)item;
+  Msg msg;
+  if (raw->type == (MsgType)EVENT_PAYLOAD_LED_TOGGLED) {
+      const LedToggledEvent *ev = (const LedToggledEvent *)item;
+      msg = (Msg){ .type = MSG_LED_TOGGLED, .success = false, .led_on = ev->on };
+  } else {
+      msg = *raw;
+  }
+  UpdateResult result = fetch_and_uart_update(local_model, msg);
+  local_model = result.next;
+  execute_fetch_and_uart_hardware(&result.command);
+  ```
+- Consumer shell path: `command->led_on ? "/?led=on" : "/?led=off"`; prefix the base URL
+  **without a trailing slash** (`"http://192.168.4.2:8000"`) or you get `//?led=`.
+  Print the path itself (`# HTTP GET /?led=on`) so the scenario asserts it exactly.
+
+**Tips that saved time:**
+
+- Do Stage 1 with a temporary marker (`# EVENT_LED_TOGGLED RECEIVED`) and a scenario
+  step; it isolates bus/size bugs from logic bugs. Remove the marker in Stage 3.
+- A `print` of a single `bool` with `%d` needs the `? 1 : 0` cast; `printf("%d", bool)`
+  reads an `int`-sized arg.
+- Keep `MSG_LED_TOGGLED` in the `logic.c` switch from Stage 1 (returning `CMD_NONE`) so
+  `-Wswitch-enum -Werror` stays green the moment you add the enum variant.
+- The NET button path (`MSG_UART_TX_DONE`) must keep working; assert its new
+  `# HTTP GET /?led=off` in `fetch_and_uart.yaml` in the same run to catch a regression.
+- Reuse the existing `http_get_sample` by adding a `const char *path` parameter and
+  `snprintf`-ing the URL; do not duplicate the network code.
+
+**Pitfalls hit (and the fix):**
+
+| Pitfall | What happened | Fix |
+|---|---|---|
+| Bus delivers only bytes, not the event id | A queue shared by two events had no way to tell them apart; a `{ bool on; }` payload read as `Msg` gives garbage `type` | Give every `main/events.h` payload a leading `EventPayloadTag` at offset 0 (see §9.1) |
+| Size mismatch on the shared queue | `Msg` is 8 bytes, a bare `{ bool }` is 1; trailing bytes are uninitialized and `Msg` is unsafe | Make the payload and the consumer `Msg` both 8 bytes with matching offsets, subscribe with the payload's `sizeof` |
+| `snprintf` double slash | Base URL had a trailing `/` and paths start with `/` → `//?led=on` | Store the base without the trailing slash |
+| `[Velxio] WebSocket error` | Ran a scenario while the container was still installing deps/cores/provisioning IDF before nginx/uvicorn were up | Wait for `curl http://localhost/health` → `200` in the container, then run |
+| `status -1` on the fetch | Proxy waited its full 5 s upstream timeout; UC-5's client timed out at 5 s first | Run a real parent `:8000`, or `VELXIO_PROXY_TIMEOUT=0.5` so the stub beats the client |
+| Stale proxy on `:8000` | `status` said not-running but a process held the port after a restart | `./scripts/dev-http-server.sh stop` then `start` |
+| `make native-test` picked the wrong `domain.h` | Every plugin header is `domain.h`; include order decides | Keep the consumer's dedicated `-I` set in `test/Makefile` (UC-5 already has `UC5_INC`) |
+| Event Fires but nothing runs in emulator | Publish/subscribe `sizeof` differ, or subscription wired after boot drain | Both sides use the same `events.h` type; verify `wire_subscriptions` registers it |
+
+**Definition of done observed:** `make native-test` → all PASS; `make build` → exit 0,
+`Found 5 Autonomous Modules.`; `make test` → all of `fetch_and_uart.yaml`,
+`uc1_button_toggle.yaml`, `uc5_led_toggle_fetch.yaml` `RESULT: PASS`; `rust/` untouched.
 
 ---
 

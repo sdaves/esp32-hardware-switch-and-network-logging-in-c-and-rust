@@ -23,7 +23,7 @@
  * an uploaded prebuilt .bin associates without any in-editor SSID rewrite. */
 #define FETCH_AND_UART_WIFI_SSID "Espressif"
 #define FETCH_AND_UART_WIFI_PASS ""
-#define FETCH_AND_UART_URL       "http://192.168.4.2:8000/"
+#define FETCH_AND_UART_URL       "http://192.168.4.2:8000"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -115,10 +115,13 @@ static bool wifi_wait_connected(void)
     return (bits & WIFI_CONNECTED_BIT) != 0;
 }
 
-static void http_get_sample(void)
+static void http_get_sample(const char *path)
 {
+    char url[96];
+    snprintf(url, sizeof(url), "%s%s", FETCH_AND_UART_URL, path);
+
     esp_http_client_config_t config = {
-        .url = FETCH_AND_UART_URL,
+        .url = url,
         .timeout_ms = 5000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -138,13 +141,12 @@ static void http_get_sample(void)
             read = 0;
         }
         buf[read] = '\0';
-        printf("# HTTP GET %s -> status %d, len %d\n",
-               FETCH_AND_UART_URL, status, total);
+        printf("# HTTP GET %s -> status %d, len %d\n", path, status, total);
         if (read > 0) {
             printf("# HTTP BODY[%d]: %s\n", read, buf);
         }
     } else {
-        printf("# HTTP GET FAILED (%d)\n", (int)err);
+        printf("# HTTP GET %s FAILED (%d)\n", path, (int)err);
     }
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -179,7 +181,7 @@ void execute_fetch_and_uart_hardware(const Cmd *command)
 #ifdef ESP_PLATFORM
         if (wifi_init_once() && wifi_wait_connected()) {
             printf("# WIFI CONNECTED (%s)\n", FETCH_AND_UART_WIFI_SSID);
-            http_get_sample();
+            http_get_sample(command->led_on ? "/?led=on" : "/?led=off");
         } else {
             printf("# WIFI CONNECT FAILED (%s)\n", FETCH_AND_UART_WIFI_SSID);
         }
