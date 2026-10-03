@@ -24,7 +24,7 @@ distillation.
 |---|---|---|
 | 0 | toolchain + hello-world + Wi-Fi spikes | **done** (2026-10-02) |
 | 1 | `tea-core` + `tea-platform` + `firmware` + `host`, UC-1 | **done** (2026-10-02) |
-| 2 | UC-2..UC-5 parity, emulator scenarios | **in progress** — UC-5 real (Wi-Fi + HTTP + LED-state query), UC-2..UC-4 logic-only |
+| 2 | UC-2..UC-5 parity, emulator scenarios | **done** (2026-10-03) — UC-1 (GPIO + `LedToggled`) and UC-5 (Wi-Fi + HTTP + LED-state query) real; UC-2..UC-4 logic-only empty commands, matching C |
 | 3 | iced dashboard (`ui`, native + wasm) | pending |
 
 UC-5 status: the NET button runs UART → Wi-Fi (up to 3 attempts at boot) → HTTP
@@ -56,9 +56,10 @@ must not relax them.
    all variants. **Never write a `_ =>` arm** for these enums. New variants must
    cause a compile error until handled (the Rust replacement for
    `-Wswitch-enum -Werror=switch`).
-5. **No central module list.** Registration is autonomous
-   (`linkme`/`inventory`, or the `register_modules!` fallback, runbook §5.2).
-   Adding/removing a feature must not require editing `main`.
+5. **Module registration.** Registration uses the `register_modules!` fallback
+   (runbook §5.2): `crates/firmware/src/main.rs` lists every module in one macro
+   invocation. Adding/removing a feature takes one line there plus its plugin
+   module — `linkme`/`inventory` reflection was not used.
 6. **Do not edit the C tree or the shared IDF tree.** In particular, never leave
    `/opt/esp-idf-v4.4` dirty (§5, finding 5).
 7. **Pin the stack** (table below). Do not opportunistically bump crates; the
@@ -139,7 +140,7 @@ python3 -m tests.velxio.runner.run_scenario \
   --server ws://localhost \
   --firmware rust/dist/firmware.merged.bin \
   --diagram tests/velxio/diagram.json \
-  --scenario rust/scenarios/phase0_wifi.yaml \
+  --scenario rust/scenarios/uc1_button_toggle.yaml \
   --timeout 40
 # exit 0 = pass, 1 = fail, 2 = config error
 ```
@@ -154,8 +155,8 @@ Assert firmware behaviour with a `printf`/`log::info!` marker +
 cd rust && cargo test        # pure tea-core/tea-platform; requires the devcontainer mount
 ```
 
-`rust/Makefile` targets `provision`, `build`, `clean` work today. `test`, `sim`,
-`scenario`, `wasm` are stubs until their scripts/crates exist (Phases 1–3).
+`rust/Makefile` targets `provision`, `build`, `test`, `sim`, `scenario`, `clean`
+work today. `wasm` is a stub until the `ui` crate exists (Phase 3).
 
 ---
 
@@ -214,7 +215,7 @@ rust/
 │   └── ui/                    # (Phase 3) iced app, native + wasm
 ├── vendor/esp-idf-svc/        # 0.48.1 + c_char casts fix (CHANGES.md documents it)
 ├── scenarios/                 # emulator scenarios driven by the C runner
-├── scripts/{provision-rust,build}.sh
+├── scripts/{provision-rust,build,test,scenario,py-http-server}.sh
 └── dist/                      # firmware.merged.bin (gitignored)
 ```
 
@@ -234,9 +235,9 @@ The C reference for each piece is in the root project:
 
 1. `cd rust && cargo test` passes (host crates).
 2. `make build` exits 0 and the boot serial contains
-   `Platform Engine Initializing: Found 5 Autonomous Modules.` Phase 1 registers
-   all five (UC-1 real; UC-2..UC-5 logic-only until Phase 2), matching the C
-   banner.
+   `Platform Engine Initializing: Found 5 Autonomous Modules.` All five register
+   (UC-1 and UC-5 real; UC-2..UC-4 logic-only stubs, matching the C empty
+   `commands.c`), matching the C banner.
 3. Every scenario in `rust/scenarios/` prints `RESULT: PASS` for the Rust bin.
 4. No warnings under `cargo clippy -- -D warnings` (dependency lints are capped
    by cargo `--cap-lints allow`; keep *our* crates clean).
