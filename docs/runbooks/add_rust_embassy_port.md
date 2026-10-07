@@ -109,7 +109,7 @@ rust/
 │   └── ui/                    # iced app (native + wasm32) that connects to the device
 ├── vendor/
 │   └── esp-idf-svc/           # 0.48.1 + the c_char casts fix ([patch.crates-io])
-├── scenarios/                 # Rust-side emulator scenarios (phase0_hello/wifi.yaml)
+├── scenarios/                 # Rust-side emulator scenarios (uc1_button_toggle, uc5_*)
 ├── scripts/
 │   ├── provision-rust.sh      # rustup + espup + espflash + ldproxy + rust-src + wasm, idempotent
 │   ├── build.sh               # cargo +esp build -> dist/firmware.merged.bin (4 MB)

@@ -1,4 +1,6 @@
-# ESP32-S3 Simulated — Zero-Allocation Elm Architecture
+# ESP32 Simulated — Zero-Allocation Elm Architecture
+
+![Simulator running](docs/simulator-running.gif)
 
 A production firmware project for **ESP32** written in **pure C11** using
 The Elm Architecture (TEA). It is built with ESP-IDF, runs on real silicon, and
@@ -9,6 +11,112 @@ board whose QEMU machine models a Wi-Fi radio (UC-5 does a real network fetch).
 
 The whole system is driven by one top-level **`Makefile`**; this README is the
 human guide to those commands.
+
+---
+
+## Architecture (C4)
+
+### Level 1 — System context
+
+```mermaid
+flowchart LR
+    dev([Developer])
+    subgraph system["esp32simulated"]
+        fw["ESP32 firmware"]
+    end
+    qemu["Velxio / QEMU"]
+    ap["Emulated Wi-Fi AP"]
+    proxy["Host HTTP server"]
+
+    dev -- "builds" --> fw
+    dev -- "drives" --> qemu
+    qemu -- "runs" --> fw
+    fw -- "joins" --> ap
+    fw -- "fetches" --> proxy
+```
+
+### Level 2 — Containers
+
+```mermaid
+flowchart TB
+    subgraph repo["esp32simulated repo"]
+        fw["Firmware — ESP32 C"]
+        native["Native tests — host C"]
+        runner["Scenario runner — Python"]
+        proxy["HTTP proxy — Python"]
+    end
+    qemu["Velxio backend — QEMU"]
+
+    runner -- "drives" --> qemu
+    qemu -- "hosts" --> fw
+    native -. "same logic" .-> fw
+    fw -- "fetches" --> proxy
+```
+
+### Level 3 — Components (firmware)
+
+```mermaid
+flowchart TB
+    subgraph shell["main.c — shell"]
+        boot["app_main"]
+        tick["esp_timer 100 ms"]
+        queue["plugin queues"]
+    end
+    subgraph bus["registry.c — bus"]
+        reg["plugin registry"]
+        ebus["event bus"]
+    end
+    subgraph plugins["use_cases/*"]
+        setup["setup.c"]
+        logic["logic.c (pure)"]
+        cmds["commands.c"]
+    end
+
+    setup -- "registers" --> reg
+    boot -- "creates" --> queue
+    boot -- "wires" --> setup
+    tick -- "ticks" --> setup
+    queue -- "dispatches" --> setup
+    setup -- "calls" --> logic
+    setup -- "executes" --> cmds
+    setup -- "pub/sub" --> ebus
+```
+
+### Level 4 — Code
+
+```mermaid
+classDiagram
+    class UseCaseModule {
+        +name
+        +message_size
+        +init_hardware()
+        +process_queue_item()
+        +poll_timer_tick()
+        +wire_subscriptions()
+    }
+    class UpdateResult {
+        +next Model
+        +command Cmd
+    }
+    class setup_c {
+        +process_queue_item()
+        +poll_timer_tick()
+        +wire_subscriptions()
+    }
+    class logic_c {
+        +toggle_led_init() Model
+        +toggle_led_update(Model, Msg) UpdateResult
+    }
+    class commands_c {
+        +init_use_case_hardware()
+        +execute_toggle_led_hardware(Cmd)
+    }
+
+    setup_c ..> UseCaseModule : provides
+    setup_c --> logic_c : calls
+    setup_c --> commands_c : executes
+    logic_c --> UpdateResult : returns
+```
 
 ---
 

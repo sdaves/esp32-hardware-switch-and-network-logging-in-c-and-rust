@@ -1,4 +1,4 @@
-# Top-level command surface for the ESP32-S3 TEA platform.
+# Top-level command surface for the ESP32 TEA platform.
 #
 # Firmware builds and emulator runs execute on the host (Docker + ESP-IDF) and
 # are driven from the devcontainer through the host listener (see AGENTS.md §6).
@@ -17,7 +17,7 @@ LONG := --max-time 2400
 .PHONY: help listener up down restart logs ps build test native-test scenario exec clean check-listener
 
 help:
-	@echo "ESP32-S3 TEA platform - top-level targets"
+	@echo "ESP32 TEA platform - top-level targets"
 	@echo ""
 	@echo "  make listener            Start the host build/test listener (run on the host)"
 	@echo "  make up                  Pull + start the Velxio stack (docker compose up --build -d)"
@@ -26,7 +26,7 @@ help:
 	@echo "  make logs                Show Velxio container logs"
 	@echo "  make ps                  Show Velxio container status"
 	@echo "  make build               Build firmware (idf.py build + 4 MB merge-bin)"
-	@echo "  make test                Native tests + firmware build + UC-1 emulator scenario"
+	@echo "  make test                Native tests + firmware build + all emulator scenarios"
 	@echo "  make native-test         Desktop C unit tests only (make -C test)"
 	@echo "  make scenario NAME=...   Run one emulator scenario (default: $(NAME))"
 	@echo "  make exec CMD='...'      Run an arbitrary shell command in the Velxio container"

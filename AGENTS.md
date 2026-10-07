@@ -161,6 +161,33 @@ it answers with a deterministic `200` stub (`VELXIO_PROXY_FALLBACK=1`, the defau
 `make test` stays green; set `VELXIO_PROXY_FALLBACK=0` to surface a `502`. `start|stop|status`
 via the shell wrapper; `test.sh` starts it automatically.
 
+> **⚠️ AGENT NOTE — always start the in-container HTTP forwarder before a simulator run.**
+> The emulated guest has **no route to the host machine**; it can only reach the `velxio`
+> container at the slirp gateway `192.168.4.2`. Any scenario whose firmware performs a network
+> fetch (UC-5 and the Rust equivalents) therefore **requires a server listening inside the Docker
+> container on a port**, which must **forward to the host machine when the host is listening**.
+>
+> Concretely, before `run_scenario.py`, `/test`, or any manual emulator session:
+>
+> ```sh
+> # via the listener: start the forwarder on the container's :8000
+> curl -sS -G --data-urlencode 'cmd=cd /workspace && ./scripts/dev-http-server.sh start' \
+>   http://host.docker.internal:2222/exec
+> ```
+>
+> `scripts/dev-http-server.py` listens on the container's `:8000`, forwards each request to
+> `VELXIO_PROXY_UPSTREAM` (default `http://host.docker.internal:8000`, i.e. **the host machine**),
+> and returns the host's real response. The "if the host machine is listening" branch is the
+> fallback: when the host's `:8000` is **not** reachable, the forwarder answers a deterministic
+> `200` stub instead (`VELXIO_PROXY_FALLBACK=1`, the default) so tests stay green; set
+> `VELXIO_PROXY_FALLBACK=0` when the host server is up and you need its real (or failing) answer.
+>
+> Do not point the firmware at the host directly, and do not skip this step because a previous
+> run left the proxy up — after a container `restart`/`up` the process is gone; re-run
+> `./scripts/dev-http-server.sh status` (or `start`, which is idempotent) and confirm `running`
+> before trusting a fetch scenario. `scripts/test.sh` starts it automatically, so the manual step
+> only matters for single-scenario / `/exec` runs.
+
 ### `tests/velxio/`
 `diagram.json` (Wokwi circuit), `scenarios/*.yaml` (per-use-case steps, all driven by `test.sh`),
 `esp32simulated.vlx` (importable Velxio project for the browser editor), and `runner/`
@@ -328,6 +355,7 @@ that a hard build failure by design.
 | Second Wi-Fi trigger reboots, `assert: esp_netif_create_default_wifi_sta` | `esp_netif_create_default_wifi_sta` re-run on a later press returns NULL | make Wi-Fi init one-shot; only `esp_wifi_connect` again |
 | `Found 0`/fewer after switching target | stale `sdkconfig`/`build` from the previous target, or a poisoned ccache | `rm -rf build sdkconfig` and `ccache -C` |
 | UC-5 fetch gets no network / proxy stub | `dev-http-server` not running, or parent `:8000` down | `./scripts/dev-http-server.sh start`; set `VELXIO_PROXY_UPSTREAM` |
+| Fetch scenario fails only when run by hand (passes under `test.sh`) | the in-container forwarder was never started — `test.sh` does it, manual `/exec` runs do not | start it first (§5 agent note): `./scripts/dev-http-server.sh start`, then confirm `status` says `running` |
 | VS Code keeps forwarding container `:8000` (collides with your host server) | VS Code auto-forwards the port and retries (`ECONNREFUSED`) | add `"8000": {"onAutoForward":"ignore"}` to `remote.portsAttributes` (done); remove the Ports-panel entry and reload |
 | Listener returns HTTP 503 | a build/test is already running | wait; requests are serialised |
 | Listener returns 404 for a route that exists in the file | host is still running the old listener process | restart `.devcontainer/docker-build-listener.py` on the host |
